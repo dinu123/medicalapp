@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Medi-Manager Pro</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root {
+        --radius: 0.75rem;
+        
+        /* Core Colors */
+        --background: 255 255 255;
+        --foreground: 17 24 39;
+        --card: 255 255 255;
+        --card-foreground: 17 24 39;
+        
+        /* Sidebar Colors */
+        --sidebar: 255 255 255; /* white */
+        --sidebar-foreground: 17 24 39; /* black */
+        --sidebar-primary: 236 243 255; /* #ecf3ff - selected bg */
+        --sidebar-primary-foreground: 70 95 255; /* #465fff - selected text */
+        --sidebar-accent: 236 243 255; /* #ecf3ff - hover bg */
+        --sidebar-accent-foreground: 17 24 39; /* black - hover text */
+        --sidebar-border: 160 180 200; /* #a0b4c8 - selected border */
+        --sidebar-ring: 79 70 229;
+        
+        /* Brand Colors */
+        --brand-blue: 79 70 229;
+        
+        /* Status Colors */
+        --success: 16 185 129;
+        --warning: 245 158 11;
+        --error: 239 68 68;
+        
+        /* Core Variables */
+        --popover: 255 255 255;
+        --popover-foreground: 17 24 39;
+        --primary: 79 70 229;
+        --primary-foreground: 255 255 255;
+        --secondary: 243 244 246;
+        --secondary-foreground: 17 24 39;
+        --muted: 243 244 246;
+        --muted-foreground: 107 114 128;
+        --accent: 239 246 255;
+        --accent-foreground: 59 130 246;
+        --destructive: 239 68 68;
+        --border: 229 231 235;
+        --input: 255 255 255;
+        --ring: 79 70 229;
+        
+        /* Chart Colors */
+        --chart-1: 45 212 191;   /* Profit/Loss (Teal) */
+        --chart-2: 6 182 212;    /* Total Sales (Cyan) */
+        --chart-3: 139 92 246;   /* Purple */
+        --chart-4: 244 114 182;  /* Pink */
+        --chart-5: 79 70 229;    /* Total Purchases (Indigo) */
+      }
+
+      .dark {
+        --background: 17 24 39;
+        --foreground: 229 231 235;
+        --card: 31 41 55;
+        --card-foreground: 229 231 235;
+        --popover: 31 41 55;
+        --popover-foreground: 229 231 235;
+        --primary: 99 102 241;
+        --primary-foreground: 255 255 255;
+        --secondary: 55 65 81;
+        --secondary-foreground: 229 231 235;
+        --muted: 55 65 81;
+        --muted-foreground: 156 163 175;
+        --accent: 30 58 138;
+        --accent-foreground: 191 219 254;
+        --destructive: 185 28 28;
+        --border: 55 65 81;
+        --input: 55 65 81;
+        --ring: 99 102 241;
+
+        --sidebar: 17 24 39;
+        --sidebar-foreground: 229 231 235;
+        --sidebar-primary: 79 70 229;
+        --sidebar-primary-foreground: 255 255 255;
+        --sidebar-accent: 55 65 81;
+        --sidebar-accent-foreground: 229 231 235;
+        
+        --chart-1: 45 212 191;
+        --chart-2: 6 182 212;
+        --chart-3: 139 92 246;
+        --chart-4: 244 114 182;
+        --chart-5: 79 70 229;
+      }
+
+      @layer base {
+        html {
+          font-size: 106.25%; /* Increases base font size from 16px to 17px */
+        }
+        * {
+          @apply border-border outline-ring/50;
+        }
+        body {
+          font-family: 'Inter', sans-serif;
+          @apply bg-background text-foreground;
+        }
+      }
+      
+      /* Hide number input spinners */
+      input::-webkit-outer-spin-button,
+      input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      input[type=number] {
+        -moz-appearance: textfield;
+      }
+      
+      @media print {
+        body * {
+          visibility: hidden;
+        }
+        .printable-area, .printable-area * {
+          visibility: visible;
+        }
+        .printable-area {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+          height: auto;
+          padding: 0;
+          margin: 0;
+        }
+        .no-print {
+          display: none !important;
+        }
+      }
+    </style>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              border: 'rgb(var(--border))',
+              input: 'rgb(var(--input))',
+              ring: 'rgb(var(--ring))',
+              background: 'rgb(var(--background))',
+              foreground: 'rgb(var(--foreground))',
+              primary: {
+                DEFAULT: 'rgb(var(--primary))',
+                foreground: 'rgb(var(--primary-foreground))',
+              },
+              secondary: {
+                DEFAULT: 'rgb(var(--secondary))',
+                foreground: 'rgb(var(--secondary-foreground))',
+              },
+              destructive: {
+                DEFAULT: 'rgb(var(--destructive))',
+              },
+              muted: {
+                DEFAULT: 'rgb(var(--muted))',
+                foreground: 'rgb(var(--muted-foreground))',
+              },
+              accent: {
+                DEFAULT: 'rgb(var(--accent))',
+                foreground: 'rgb(var(--accent-foreground))',
+              },
+              popover: {
+                DEFAULT: 'rgb(var(--popover))',
+                foreground: 'rgb(var(--popover-foreground))',
+              },
+              card: {
+                DEFAULT: 'rgb(var(--card))',
+                foreground: 'rgb(var(--card-foreground))',
+              },
+              sidebar: {
+                DEFAULT: 'rgb(var(--sidebar))',
+                foreground: 'rgb(var(--sidebar-foreground))',
+                primary: 'rgb(var(--sidebar-primary))',
+                'primary-foreground': 'rgb(var(--sidebar-primary-foreground))',
+                accent: 'rgb(var(--sidebar-accent))',
+                'accent-foreground': 'rgb(var(--sidebar-accent-foreground))',
+              },
+              brand: {
+                blue: 'rgb(var(--brand-blue))',
+              },
+              success: 'rgb(var(--success))',
+              warning: 'rgb(var(--warning))',
+              error: 'rgb(var(--error))',
+              chart: {
+                1: 'rgb(var(--chart-1))',
+                2: 'rgb(var(--chart-2))',
+                3: 'rgb(var(--chart-3))',
+                4: 'rgb(var(--chart-4))',
+                5: 'rgb(var(--chart-5))',
+              }
+            },
+            borderRadius: {
+              xl: 'calc(var(--radius) + 4px)',
+              lg: 'var(--radius)',
+              md: 'calc(var(--radius) - 2px)',
+              sm: 'calc(var(--radius) - 4px)',
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+          }
+        }
+      }
+    </script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react/": "https://esm.sh/react@^19.1.1/",
+        "react": "https://esm.sh/react@^19.1.1",
+        "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+        "@google/genai": "https://esm.sh/@google/genai@^1.15.0",
+        "recharts": "https://esm.sh/recharts@^3.1.2"
+      }
+    }
+    </script>
+  </head>
+  <body class="bg-secondary text-foreground">
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
