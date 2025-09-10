@@ -107,13 +107,13 @@ const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onSa
     
     const headerDisplayNames: Record<string, string> = {
         name: 'Name', hsnCode: 'HSN', pack: 'Pack', manufacturer: 'Mfr', batchNumber: 'Batch',
-        expiryDate: 'Expiry', stock: 'Qty', mrp: 'MRP', price: 'Rate', discount: 'Disc(%)', salts: 'Salts',
+        expiryDate: 'Expiry', stock: 'Qty', freeScheme: 'Free/Scheme', mrp: 'MRP', price: 'Rate', discount: 'Disc(%)', salts: 'Salts',
         tax: 'Tax(%)', amount: 'Amount'
     };
     
     const preferredHeaderOrder: string[] = [
         'name', 'hsnCode', 'pack', 'manufacturer', 'salts', 'batchNumber', 
-        'expiryDate', 'stock', 'mrp', 'price', 'discount', 'tax', 'amount'
+        'expiryDate', 'stock', 'freeScheme', 'mrp', 'price', 'discount', 'tax', 'amount'
     ];
     
     const formatValue = (value: any, key: string) => {

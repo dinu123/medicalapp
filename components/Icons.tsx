@@ -63,7 +63,7 @@ export const ProfileIcon = ({ className = 'w-6 h-6' }: { className?: string }) =
 
 export const SettingsIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-1.007 1.11-1.11h2.592c.55.103 1.02.57 1.11 1.11l.09 1.586c.383.218.734.494 1.05.805l1.348-.546c.524-.212 1.1.259 1.23.806l1.35 2.338c.13.547-.19.99-.74 1.23l-1.062.433c-.046.362-.078.734-.078 1.115s.032.753.078 1.115l1.062.433c.55.24 1.23.806.74 1.23l-1.35 2.338c-.13.547-.7.62-1.23.806l-1.348-.546c-.316.31-.667.587-1.05.805l-.09 1.586c-.09.542-.56 1.007-1.11 1.11h-2.592c-.55-.103-1.02-.57-1.11-1.11l-.09-1.586c-.383-.218-.734-.494-1.05-.805l-1.348.546c-.524-.212-1.1-.259-1.23-.806l-1.35-2.338c-.13-.547.19-.99.74-1.23l1.062-.433c.046-.362.078-.734-.078-1.115s-.032-.753-.078-1.115l-1.062-.433c-.55-.24-.74-.683-.74-1.23l1.35-2.338c.13-.547.705-.62 1.23-.806l1.348.546c.316-.31.667.587 1.05-.805l.09-1.586Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-1.007 1.11-1.11h2.592c.55.103 1.02.57 1.11 1.11l.09 1.586c.383.218.734.494 1.05.805l1.348-.546c.524-.212 1.1.259 1.23.806l1.35 2.338c.13.547-.19.99-.74 1.23l-1.062.433c-.046.362-.078.734-.078 1.115s.032.753.078 1.115l1.062.433c.55.24 1.23.806.74 1.23l-1.35 2.338c-.13.547-.7.62-1.23.806l-1.348-.546c-.316.31-.667.587-1.05.805l-.09 1.586c-.09.542-.56 1.007-1.11 1.11h-2.592c-.55-.103-1.02-.57-1.11-1.11l-.09-1.586c-.383-.218-.734.494-1.05-.805l-1.348.546c-.524-.212-1.1-.259-1.23-.806l-1.35-2.338c-.13-.547.19-.99.74-1.23l1.062-.433c.046-.362.078-.734-.078-1.115s-.032-.753-.078-1.115l-1.062-.433c-.55-.24-.74-.683-.74-1.23l1.35-2.338c.13-.547.705-.62 1.23-.806l1.348.546c.316-.31.667.587 1.05-.805l.09-1.586Z" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
     </svg>
 );
@@ -193,4 +193,36 @@ export const PrintIcon = ({ className = 'w-5 h-5' }: { className?: string }) => 
     <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H7a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm2-9V5a2 2 0 00-2-2H9a2 2 0 00-2 2v3m4-3h6" />
     </svg>
+);
+
+export const TotalItemsIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-2.25-1.313M21 7.5v2.25m0-2.25l-2.25 1.313M3 7.5l2.25-1.313M3 7.5l2.25 1.313M3 7.5v2.25m9 3l2.25-1.313M12 12.75l-2.25-1.313M12 12.75V15m0 6.75l2.25-1.313M12 21.75V19.5m0 2.25l-2.25-1.313m0-16.875L12 2.25l2.25 1.313M12 7.5V5.25m0 2.25l-2.25-1.313m0 0L12 2.25" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 7.5l2.25-1.313M12 7.5l-2.25-1.313M3 7.5l2.25-1.313M21 7.5l-2.25-1.313m-16.5 0L12 2.25l9 5.25m-18 0v9l9 5.25m9-5.25v-9l-9-5.25" />
+  </svg>
+);
+
+export const OutOfStockIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 4.5l15 15" />
+  </svg>
+);
+
+export const TotalValueIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m12 3V9" />
+  </svg>
+);
+
+export const ActionsIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+  </svg>
+);
+
+export const ExportIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+  </svg>
 );

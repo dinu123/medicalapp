@@ -20,6 +20,8 @@ export interface Product {
   salts?: string;
   schedule?: MedicineSchedule;
   batches: Batch[];
+  category?: string;
+  minStock?: number;
 }
 
 export interface Supplier {
@@ -150,7 +152,7 @@ export interface CartItem {
     batchId: string;
 }
 
-export type InventoryFilterStatus = 'all' | 'low_stock' | 'expiring_soon' | 'expired';
+export type InventoryFilterStatus = 'all' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
 export type TransactionFilterType = 'all' | 'sales' | 'purchases';
 export type TransactionFilterPeriod = 'all' | 'last_month';
 

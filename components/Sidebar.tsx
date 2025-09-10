@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Page } from '../types';
 import { DashboardIcon, AnalyticsIcon, TransactionsIcon, InventoryIcon, SuppliersIcon, ExpiringIcon, TaxIcon, ProfileIcon, SettingsIcon, ChevronDownIcon, SparklesIcon, ReturnIcon, VoucherIcon } from './Icons';
 
@@ -7,12 +7,21 @@ interface SidebarProps {
   setActivePage: (page: Page) => void;
 }
 
-interface NavItemDetails {
-  id: Page | string;
+// FIX: Replaced NavItemDetails with a more accurate type for the nav items structure.
+// This ensures page properties are correctly typed as `Page` and optional properties like `disabled` are recognized.
+interface NavItemData {
+  id: string;
   label: string;
   icon: React.ReactNode;
   page?: Page;
   disabled?: boolean;
+  subItems?: {
+    id: string;
+    label: string;
+    page: Page;
+    icon: React.ReactNode;
+    disabled?: boolean;
+  }[];
 }
 
 const NavItem: React.FC<{
@@ -48,7 +57,8 @@ const NavItem: React.FC<{
 const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
   const [openDropdowns, setOpenDropdowns] = useState<string[]>([]);
 
-  const navItems: (NavItemDetails & { subItems?: NavItemDetails[] })[] = [
+  // FIX: Typed the navItems array to ensure type safety.
+  const navItems: NavItemData[] = useMemo(() => [
     {
       id: 'dashboard',
       label: 'Dashboard',
@@ -69,21 +79,32 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
     { id: 'tax', label: 'Tax Reports', icon: <TaxIcon />, page: 'tax', disabled: true },
     { id: 'profile', label: 'My Profile', icon: <ProfileIcon />, page: 'profile', disabled: true },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon />, page: 'settings' },
-  ];
+  ], []);
 
+  // FIX: Corrected an infinite loop by making the state update in this useEffect conditional.
+  // It now checks if the target dropdown is already open before calling the state setter,
+  // preventing a re-render cycle.
   useEffect(() => {
     // Automatically expand the parent section of the active page
     const parent = navItems.find(item => item.subItems?.some(sub => sub.page === activePage));
     const selfIsParent = navItems.find(item => item.page === activePage && item.subItems);
 
-    if (parent) {
-      setOpenDropdowns([parent.id]);
-    } else if (selfIsParent) {
-      setOpenDropdowns([selfIsParent.id]);
+    const idToOpen = parent?.id || selfIsParent?.id;
+
+    if (idToOpen) {
+        setOpenDropdowns(prevOpen => {
+            // If the correct dropdown is already open, do nothing to prevent a loop.
+            if (prevOpen.length === 1 && prevOpen[0] === idToOpen) {
+                return prevOpen;
+            }
+            // Otherwise, open the correct dropdown.
+            return [idToOpen];
+        });
     }
   }, [activePage, navItems]);
 
-  const handleParentClick = (item: NavItemDetails & { subItems?: NavItemDetails[] }) => {
+  // FIX: Updated the item type to match the strongly typed navItems array.
+  const handleParentClick = (item: NavItemData) => {
     if (item.page) {
         setActivePage(item.page);
     }
@@ -105,6 +126,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
                 icon={item.icon}
                 label={item.label}
                 isActive={activePage === item.page && !item.subItems}
+                // FIX: All page properties are now correctly typed, resolving assignment errors.
                 onClick={() => (item.subItems ? handleParentClick(item) : (item.page && setActivePage(item.page)))}
                 hasDropdown={!!item.subItems}
                 isDropdownOpen={openDropdowns.includes(item.id)}
@@ -118,7 +140,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
                       icon={subItem.icon}
                       label={subItem.label}
                       isActive={activePage === subItem.page}
+                      // FIX: `subItem.page` is now correctly typed as `Page`.
                       onClick={() => subItem.page && setActivePage(subItem.page)}
+                      // FIX: `subItem.disabled` is now a valid optional property.
                       disabled={subItem.disabled}
                       isSubItem
                     />

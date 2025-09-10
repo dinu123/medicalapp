@@ -131,18 +131,17 @@ For each object in the array, use the following camelCase keys corresponding to 
 
 - \`serialNumber\`: from columns like 's.no.', 'sr.', 'sr. no.'
 - \`hsnCode\`: from columns like 'hsn code', 'hsn'
-- \`name\`: from columns like 'description', 'desc', 'product name'
+- \`name\`: from columns like 'description', 'desc', 'product name', 'item name'
 - \`salts\`: from columns like 'composition', 'salts'
 - \`pack\`: from columns like 'packing', 'pack'
-- \`manufacturer\`: from columns like 'manufacturer', 'mfr'
-- \`batchNumber\`: from columns like 'batch no', 'batchno'
-- \`expiryDate\`: from columns like 'exp dt', 'expiry'. IMPORTANT: Convert MM-YYYY format to YYYY-MM-DD (e.g., 03-2022 becomes 2022-03-31).
+- \`manufacturer\`: from columns like 'manufacturer', 'mfr', 'mfg'
+- \`batchNumber\`: from columns like 'batch no', 'batchno', 'batch'
+- \`expiryDate\`: from columns like 'exp dt', 'expiry', 'exp date'. IMPORTANT: Convert MM-YYYY format to YYYY-MM-DD (e.g., 03-2022 becomes 2022-03-31).
 - \`stock\`: from columns like 'quantity', 'qty'
-- \`free\`: from columns like 'free qty', 'free', 'fr'
-- \`scheme\`: from columns like 'scheme', 'sch'
+- \`freeScheme\`: from columns like 'free qty', 'free', 'fr', 'scheme', 'sch'. Extract this as a string.
 - \`mrp\`: from columns like 'mrp'
 - \`price\`: from columns like 'rate', 'price'
-- \`discount\`: from columns like 'discount %', 'disc %'
+- \`discount\`: from columns like 'discount %', 'disc %', 'disc'
 - \`tax\`: from columns like 'gst%', 'tax %', 'gst'. If CGST and SGST columns are separate, add their percentages for a total tax rate.
 - \`amount\`: from columns like 'total', 'amount', 'value'
 - \`schedule\`: Analyze the product name. If it contains terms like 'H1', 'narcotic', or 'TB', set this to "H1", "narcotic", or "tb" respectively. If it's a known prescription drug, set to "H". Otherwise, omit this key.
@@ -184,6 +183,7 @@ CRITICAL INSTRUCTIONS:
                     batchNumber: parseString(item.batchNumber),
                     expiryDate: parseString(item.expiryDate),
                     stock: parseNumeric(item.stock),
+                    freeScheme: parseString(item.freeScheme),
                     mrp: parseNumeric(item.mrp),
                     price: parseNumeric(item.price),
                     discount: parseNumeric(item.discount),

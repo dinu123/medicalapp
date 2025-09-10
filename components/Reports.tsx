@@ -93,9 +93,20 @@ const Analytics: React.FC = () => {
     const kpiData = useMemo(() => {
         const totalSales = filteredData.filteredTransactions.reduce((sum, t) => sum + t.total, 0);
         const totalPurchases = filteredData.filteredPurchases.reduce((sum, p) => sum + p.total, 0);
-        const grossProfit = totalSales - totalPurchases;
+
+        const costOfGoodsSold = filteredData.filteredTransactions.reduce((cogsSum, t) => {
+            return cogsSum + t.items.reduce((itemCogsSum, item) => {
+                const product = products.find(p => p.id === item.productId);
+                const batch = product?.batches.find(b => b.id === item.batchId);
+                // batch.price is the purchase rate (cost)
+                const itemCost = batch ? batch.price * item.quantity : 0;
+                return itemCogsSum + itemCost;
+            }, 0);
+        }, 0);
+
+        const grossProfit = totalSales - costOfGoodsSold;
         const profitMargin = totalSales > 0 ? (grossProfit / totalSales) * 100 : 0;
-        // FIX: Calculate total inventory value by iterating through all batches of all products.
+        
         const totalInventoryValue = products.reduce((sum, p) => sum + p.batches.reduce((batchSum, b) => batchSum + (b.stock * b.price), 0), 0);
         const inventoryTurnover = totalInventoryValue > 0 ? totalPurchases / totalInventoryValue : 0;
 
@@ -103,27 +114,39 @@ const Analytics: React.FC = () => {
     }, [filteredData, products]);
 
     const timeSeriesData = useMemo(() => {
-        const data = new Map<string, { sales: number; purchases: number }>();
+        const data = new Map<string, { sales: number; purchases: number; cogs: number }>();
         const start = new Date(dateRange.from);
         const end = new Date(dateRange.to);
 
-        for (let d = start; d <= end; d.setDate(d.getDate() + 1)) {
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
             const key = d.toISOString().split('T')[0];
-            data.set(key, { sales: 0, purchases: 0 });
+            data.set(key, { sales: 0, purchases: 0, cogs: 0 });
         }
         
         filteredData.filteredTransactions.forEach(t => {
             const key = new Date(t.date).toISOString().split('T')[0];
-            if(data.has(key)) data.get(key)!.sales += t.total;
+            const entry = data.get(key);
+            if(entry) {
+                entry.sales += t.total;
+                const transactionCogs = t.items.reduce((cogs, item) => {
+                     const product = products.find(p => p.id === item.productId);
+                     const batch = product?.batches.find(b => b.id === item.batchId);
+                     return cogs + (batch ? batch.price * item.quantity : 0);
+                }, 0);
+                entry.cogs += transactionCogs;
+            }
         });
         
         filteredData.filteredPurchases.forEach(p => {
             const key = new Date(p.date).toISOString().split('T')[0];
-            if(data.has(key)) data.get(key)!.purchases += p.total;
+            const entry = data.get(key);
+            if(entry) {
+                entry.purchases += p.total;
+            }
         });
 
         return Array.from(data.entries()).map(([date, values]) => {
-            const profit = values.sales - values.purchases;
+            const profit = values.sales > 0 ? values.sales - values.cogs : -values.cogs;
             const margin = values.sales > 0 ? (profit / values.sales) * 100 : 0;
             return {
                 name: new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
@@ -133,7 +156,7 @@ const Analytics: React.FC = () => {
                 margin: parseFloat(margin.toFixed(2)),
             };
         });
-    }, [filteredData, dateRange]);
+    }, [filteredData, dateRange, products]);
 
     const salesByCategoryData = useMemo(() => {
         const salesMap = new Map<string, number>();
@@ -141,7 +164,7 @@ const Analytics: React.FC = () => {
             t.items.forEach(item => {
                 const product = products.find(p => p.id === item.productId);
                 if (product) {
-                    const category = product.name.includes('Syrup') ? 'Syrups' : product.name.includes('Tablet') || product.name.includes('tabs') || product.name.includes('caps') ? 'Tablets/Capsules' : 'Other';
+                    const category = product.category || 'Uncategorized';
                     const currentSales = salesMap.get(category) || 0;
                     salesMap.set(category, currentSales + item.price * item.quantity);
                 }
@@ -155,7 +178,6 @@ const Analytics: React.FC = () => {
         filteredData.filteredTransactions.forEach(t => {
             t.items.forEach(item => {
                 const product = products.find(p => p.id === item.productId);
-                // FIX: Get cost from the specific batch of the sold item.
                 if (product) {
                     const batch = product.batches.find(b => b.id === item.batchId);
                     if (batch) { // If the batch that was sold is not found, we cannot calculate profit.
@@ -241,7 +263,8 @@ const Analytics: React.FC = () => {
                     <h2 className="text-lg font-semibold text-foreground mb-4 px-2">Sales by Product Category</h2>
                     <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
-                            <Pie data={salesByCategoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} labelLine={false} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                            {/* FIX: Cast label props to `any` to bypass incorrect type inference missing the `percent` property. */}
+                            <Pie data={salesByCategoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} labelLine={false} label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}>
                                 {salesByCategoryData.map((entry, index) => (
                                     <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                                 ))}
