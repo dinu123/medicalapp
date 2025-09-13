@@ -71,6 +71,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
     { id: 'billing', label: 'Sell', icon: <TransactionsIcon />, page: 'billing' },
     { id: 'transaction-history', label: 'History', icon: <TransactionsIcon />, page: 'transaction-history' },
     { id: 'inventory', label: 'Inventory', icon: <InventoryIcon />, page: 'inventory' },
+    { id: 'purchase-orders', label: 'Purchase Orders', icon: <TransactionsIcon />, page: 'purchase-orders' },
     { id: 'expiring', label: 'Expiring Medicines', icon: <ExpiringIcon />, page: 'expiring' },
     { id: 'gemini', label: 'AI Helper', icon: <SparklesIcon />, page: 'gemini' },
     { id: 'suppliers', label: 'Suppliers', icon: <SuppliersIcon />, page: 'suppliers' },

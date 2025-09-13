@@ -10,7 +10,8 @@ import ExpiringMedicines from './components/ExpiringMedicines';
 import Suppliers from './components/Suppliers';
 import Returns from './components/Returns';
 import Vouchers from './components/Vouchers';
-import { Page, Product, Transaction, Purchase, AppContextType, CartItem, InventoryFilter, TransactionFilter, GstSettings, Supplier, CustomerReturn, SupplierReturn, Voucher, CreditNote, LedgerEntry } from './types';
+import PurchaseOrders from './components/PurchaseOrders';
+import { Page, Product, Transaction, Purchase, AppContextType, CartItem, InventoryFilter, TransactionFilter, GstSettings, Supplier, CustomerReturn, SupplierReturn, Voucher, CreditNote, LedgerEntry, OrderListItem, PurchaseOrder } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { initialProducts, initialTransactions, initialPurchases, initialSuppliers } from './data/mockData';
 
@@ -49,6 +50,12 @@ export const AppContext = createContext<AppContextType>({
     setCreditNotes: () => {},
     ledger: [],
     setLedger: () => {},
+    orderList: [],
+    setOrderList: () => {},
+    purchaseOrders: [],
+    setPurchaseOrders: () => {},
+    returnInitiationData: null,
+    setReturnInitiationData: () => {},
 });
 
 const SettingsPage: React.FC = () => {
@@ -114,6 +121,9 @@ const App: React.FC = () => {
     const [vouchers, setVouchers] = useLocalStorage<Voucher[]>('vouchers', []);
     const [creditNotes, setCreditNotes] = useLocalStorage<CreditNote[]>('creditNotes', []);
     const [ledger, setLedger] = useLocalStorage<LedgerEntry[]>('ledger', []);
+    const [orderList, setOrderList] = useLocalStorage<OrderListItem[]>('orderList', []);
+    const [purchaseOrders, setPurchaseOrders] = useLocalStorage<PurchaseOrder[]>('purchaseOrders', []);
+    const [returnInitiationData, setReturnInitiationData] = useState<{ productId: string; batchId: string } | null>(null);
 
 
     const addToCart = useCallback((product: Product) => {
@@ -180,6 +190,8 @@ const App: React.FC = () => {
                 return <Dashboard />;
             case 'inventory':
                 return <Inventory />;
+            case 'purchase-orders':
+                return <PurchaseOrders />;
             case 'billing':
                 return <Sell />;
             case 'transaction-history':
@@ -217,7 +229,10 @@ const App: React.FC = () => {
         supplierReturns, setSupplierReturns,
         vouchers, setVouchers,
         creditNotes, setCreditNotes,
-        ledger, setLedger
+        ledger, setLedger,
+        orderList, setOrderList,
+        purchaseOrders, setPurchaseOrders,
+        returnInitiationData, setReturnInitiationData,
     };
 
     return (

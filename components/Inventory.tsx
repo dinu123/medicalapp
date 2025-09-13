@@ -1,7 +1,7 @@
-import React, { useState, useContext, useMemo, useEffect } from 'react';
+import React, { useState, useContext, useMemo, useEffect, useRef } from 'react';
 import { AppContext } from '../App';
-import { Product, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier, InventoryFilterStatus } from '../types';
-import { PlusIcon, XIcon, UploadIcon, TotalItemsIcon, LowStockIcon, OutOfStockIcon, TotalValueIcon, ActionsIcon, ChevronDownIcon, ExportIcon } from './Icons';
+import { Product, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier, InventoryFilterStatus, OrderListItem, PurchaseOrder } from '../types';
+import { PlusIcon, XIcon, UploadIcon, TotalItemsIcon, LowStockIcon, OutOfStockIcon, TotalValueIcon, ActionsIcon, ChevronDownIcon, ExportIcon, SearchIcon } from './Icons';
 import BulkUploadModal from './BulkUploadModal';
 import { SupplierModal } from './SupplierModal';
 
@@ -9,6 +9,7 @@ type PaymentMethod = 'cash' | 'bank' | 'upi';
 type NewProductType = 'strip' | 'bottle' | 'tube' | 'other';
 type StockStatus = 'In Stock' | 'Low Stock' | 'Out of Stock';
 type StockStatusFilter = 'all' | 'low_stock' | 'out_of_stock';
+type TagFilter = 'all' | 'ordered' | 'order_later';
 
 
 const AddStockModal: React.FC<{
@@ -322,8 +323,269 @@ const StatCard: React.FC<{ title: string; value: string; subtitle: string; icon:
 );
 
 
+const EditProductModal: React.FC<{
+    product: Product | null;
+    onClose: () => void;
+    onSave: (updatedProduct: Product) => void;
+}> = ({ product, onClose, onSave }) => {
+    const [formData, setFormData] = useState<Partial<Product>>({});
+
+    useEffect(() => {
+        if (product) {
+            setFormData({
+                name: product.name,
+                manufacturer: product.manufacturer,
+                category: product.category,
+                minStock: product.minStock,
+            });
+        }
+    }, [product]);
+
+    if (!product) return null;
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { name, value, type } = e.target;
+        setFormData(prev => ({ ...prev, [name]: type === 'number' ? parseInt(value, 10) : value }));
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        onSave({ ...product, ...formData });
+    };
+
+    const inputClass = "w-full p-3 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring";
+    const labelClass = "block text-sm font-semibold text-muted-foreground mb-1";
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50">
+            <div className="bg-card text-card-foreground rounded-xl p-6 w-full max-w-lg m-4 border border-border shadow-2xl">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-2xl font-bold">Edit {product.name}</h2>
+                    <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><XIcon /></button>
+                </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div><label className={labelClass}>Product Name</label><input type="text" name="name" value={formData.name || ''} onChange={handleChange} className={inputClass} required /></div>
+                    <div><label className={labelClass}>Manufacturer</label><input type="text" name="manufacturer" value={formData.manufacturer || ''} onChange={handleChange} className={inputClass} required /></div>
+                    <div><label className={labelClass}>Category</label><input type="text" name="category" value={formData.category || ''} onChange={handleChange} className={inputClass} /></div>
+                    <div><label className={labelClass}>Minimum Stock</label><input type="number" name="minStock" value={formData.minStock || 0} onChange={handleChange} className={inputClass} required /></div>
+                    <div className="flex justify-end space-x-3 pt-4">
+                        <button type="button" onClick={onClose} className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold">Cancel</button>
+                        <button type="submit" className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-md">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+const DeleteConfirmationModal: React.FC<{
+    product: Product | null;
+    onClose: () => void;
+    onConfirm: (productId: string) => void;
+}> = ({ product, onClose, onConfirm }) => {
+    if (!product) return null;
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50">
+            <div className="bg-card text-card-foreground rounded-xl p-6 w-full max-w-md m-4 border border-border shadow-2xl">
+                <h2 className="text-2xl font-bold">Confirm Deletion</h2>
+                <p className="my-4 text-muted-foreground">Are you sure you want to delete <strong>{product.name}</strong>? This action cannot be undone.</p>
+                <div className="flex justify-end space-x-3">
+                    <button onClick={onClose} className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold">Cancel</button>
+                    <button onClick={() => onConfirm(product.id)} className="px-5 py-2.5 rounded-lg bg-destructive text-white hover:bg-destructive/90 font-semibold shadow-md">Delete</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const PurchaseOrderList: React.FC = () => {
+    const { orderList, setOrderList, suppliers, setPurchaseOrders, setActivePage, setProducts, products, purchases } = useContext(AppContext);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [searchResults, setSearchResults] = useState<Product[]>([]);
+    const [showResults, setShowResults] = useState(false);
+    const searchRef = useRef<HTMLDivElement>(null);
+    
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+                setShowResults(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    useEffect(() => {
+        if (searchTerm.length > 1) {
+            const lowerCaseTerm = searchTerm.toLowerCase();
+            const results = products.filter(p => p.name.toLowerCase().includes(lowerCaseTerm)).slice(0, 5);
+            setSearchResults(results);
+            setShowResults(true);
+        } else {
+            setSearchResults([]);
+            setShowResults(false);
+        }
+    }, [searchTerm, products]);
+
+    const handleAddItemToOrder = (product: Product) => {
+        // This logic is duplicated from the main component's handleAddToOrder
+        const productPurchases = purchases.filter(p => p.items.some(item => item.productId === product.id));
+        let bestSupplierId = '';
+        let bestRate = Infinity;
+        let bestMrp = 0;
+
+        if (productPurchases.length > 0) {
+            productPurchases.forEach(p => p.items.forEach(item => {
+                if (item.productId === product.id && item.price < bestRate) {
+                    bestRate = item.price;
+                    bestSupplierId = p.supplierId;
+                    bestMrp = product.batches.find(b => b.id === item.batchId)?.mrp || 0;
+                }
+            }));
+        } else {
+            const supplierWithBestDiscount = suppliers.sort((a, b) => b.defaultDiscount - a.defaultDiscount)[0];
+            if (supplierWithBestDiscount) bestSupplierId = supplierWithBestDiscount.id;
+        }
+        if (!bestSupplierId && suppliers.length > 0) bestSupplierId = suppliers[0].id;
+        
+        const typicalBatch = product.batches.find(b => b.stock > 0);
+        if (bestRate === Infinity) bestRate = typicalBatch ? typicalBatch.price : 0;
+        if (bestMrp === 0) bestMrp = typicalBatch ? typicalBatch.mrp : 0;
+
+        setOrderList(prev => {
+            if (prev.some(item => item.productId === product.id)) return prev;
+            return [...prev, {
+                productId: product.id, productName: product.name, manufacturer: product.manufacturer,
+                pack: product.pack, selectedSupplierId: bestSupplierId, quantity: 1, rate: bestRate, mrp: bestMrp
+            }];
+        });
+        setSearchTerm('');
+        setShowResults(false);
+    };
+
+
+    if (orderList.length === 0) return null;
+    
+    const handleQuantityChange = (productId: string, newQuantity: number) => {
+        setOrderList(prev => prev.map(item => item.productId === productId ? {...item, quantity: newQuantity < 0 ? 0 : newQuantity} : item));
+    }
+    
+    const handleSupplierChange = (productId: string, newSupplierId: string) => {
+        setOrderList(prev => prev.map(item => item.productId === productId ? {...item, selectedSupplierId: newSupplierId} : item));
+    }
+    
+    const handleRemoveItem = (productId: string) => {
+        setOrderList(prev => prev.filter(item => item.productId !== productId));
+    }
+
+    const handleCreatePurchaseOrder = () => {
+        if (orderList.length === 0) return;
+
+        const primarySupplierId = orderList[0].selectedSupplierId;
+        const totalOrderValue = orderList.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
+
+        const newPO: PurchaseOrder = {
+            id: `PO-${Date.now()}`,
+            supplierId: primarySupplierId,
+            items: orderList,
+            createdDate: new Date().toISOString(),
+            status: 'ordered',
+            totalValue: totalOrderValue,
+        };
+
+        setPurchaseOrders(prev => [...prev, newPO]);
+
+        const orderedProductIds = orderList.map(item => item.productId);
+        setProducts(prevProducts =>
+            prevProducts.map(p =>
+                orderedProductIds.includes(p.id) ? { ...p, isOrdered: true } : p
+            )
+        );
+        
+        setOrderList([]);
+        setActivePage('purchase-orders');
+    };
+
+    const totalOrderValue = orderList.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
+
+    return (
+        <div className="mt-6 bg-card rounded-xl border border-border p-5">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-foreground">Purchase Order List</h2>
+                <button onClick={() => setOrderList([])} className="text-sm font-semibold text-destructive hover:underline">Clear List</button>
+            </div>
+             <div ref={searchRef} className="relative mb-4">
+                <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                <input
+                    type="text"
+                    placeholder="Search to add more products..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="w-full p-3 pl-10 border border-border rounded-lg bg-input"
+                />
+                {showResults && (
+                    <ul className="absolute top-full mt-1 w-full bg-card border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
+                        {searchResults.length > 0 ? searchResults.map(p => (
+                            <li key={p.id} onClick={() => handleAddItemToOrder(p)} className="p-3 cursor-pointer hover:bg-secondary/50">
+                                <p className="font-semibold">{p.name}</p>
+                            </li>
+                        )) : <li className="p-3 text-center text-muted-foreground">No products found.</li>}
+                    </ul>
+                )}
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left text-foreground min-w-[800px]">
+                    <thead className="text-xs text-muted-foreground uppercase bg-secondary/50">
+                        <tr>
+                            <th className="px-4 py-3 font-semibold">Product</th>
+                            <th className="px-4 py-3 font-semibold">Supplier</th>
+                            <th className="px-4 py-3 font-semibold text-center">Qty</th>
+                            <th className="px-4 py-3 font-semibold text-right">Rate</th>
+                            <th className="px-4 py-3 font-semibold text-right">Amount</th>
+                            <th className="px-4 py-3 font-semibold text-center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {orderList.map(item => (
+                            <tr key={item.productId} className="border-t border-border">
+                                <td className="px-4 py-3">
+                                    <p className="font-semibold">{item.productName}</p>
+                                    <p className="text-xs text-muted-foreground">{item.manufacturer} ({item.pack})</p>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <select value={item.selectedSupplierId} onChange={e => handleSupplierChange(item.productId, e.target.value)} className="w-full p-2 border border-border rounded-md bg-input focus:ring-1 focus:ring-ring">
+                                        {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                    </select>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <input type="number" value={item.quantity} onChange={e => handleQuantityChange(item.productId, parseInt(e.target.value) || 0)} className="w-20 p-2 text-center border border-border rounded-md bg-input"/>
+                                </td>
+                                <td className="px-4 py-3 text-right">₹{item.rate.toFixed(2)}</td>
+                                <td className="px-4 py-3 text-right font-bold">₹{(item.rate * item.quantity).toFixed(2)}</td>
+                                <td className="px-4 py-3 text-center">
+                                    <button onClick={() => handleRemoveItem(item.productId)} className="text-destructive"><XIcon className="w-5 h-5"/></button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                    <tfoot>
+                        <tr className="border-t-2 border-border">
+                            <td colSpan={4} className="text-right font-bold px-4 py-3">TOTAL</td>
+                            <td className="text-right font-bold text-lg px-4 py-3">₹{totalOrderValue.toFixed(2)}</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div className="flex justify-end mt-4">
+                 <button onClick={handleCreatePurchaseOrder} className="px-4 py-2 bg-success text-white rounded-lg hover:bg-success/90 font-semibold shadow-sm text-sm">Create Purchase Order</button>
+            </div>
+        </div>
+    )
+}
+
 const Inventory: React.FC = () => {
-    const { products, setProducts, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings } = useContext(AppContext);
+    const { products, setProducts, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings, orderList, setOrderList } = useContext(AppContext);
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
@@ -331,7 +593,23 @@ const Inventory: React.FC = () => {
     
     const [categoryFilter, setCategoryFilter] = useState('All Categories');
     const [statusFilter, setStatusFilter] = useState<StockStatusFilter>((inventoryFilter.status as StockStatusFilter) || 'all');
+    const [tagFilter, setTagFilter] = useState<TagFilter>('all');
     
+    const [openActionsMenu, setOpenActionsMenu] = useState<string | null>(null);
+    const actionsMenuRef = useRef<HTMLDivElement>(null);
+    const [productToEdit, setProductToEdit] = useState<Product | null>(null);
+    const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (actionsMenuRef.current && !actionsMenuRef.current.contains(event.target as Node)) {
+                setOpenActionsMenu(null);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
     const batchToPurchaseDetailsMap = useMemo(() => {
         const map = new Map<string, { supplierName: string, invoiceNumber?: string }>();
         for (const purchase of purchases) {
@@ -417,6 +695,12 @@ const Inventory: React.FC = () => {
                 if (categoryFilter !== 'All Categories' && (product.category || 'Uncategorized') !== categoryFilter) {
                     return false;
                 }
+                if (tagFilter === 'ordered' && !product.isOrdered) {
+                    return false;
+                }
+                if (tagFilter === 'order_later' && !product.orderLater) {
+                    return false;
+                }
                 if (searchTerm) {
                     const lowerSearchTerm = searchTerm.toLowerCase();
                     const inName = product.name.toLowerCase().includes(lowerSearchTerm);
@@ -429,7 +713,7 @@ const Inventory: React.FC = () => {
                 return true;
             })
             .sort((a,b) => a.name.localeCompare(b.name));
-    }, [products, searchTerm, categoryFilter, statusFilter]);
+    }, [products, searchTerm, categoryFilter, statusFilter, tagFilter]);
 
     const handleSaveStock = (
         productData: Partial<Product>,
@@ -449,6 +733,7 @@ const Inventory: React.FC = () => {
                 const productsCopy = [...prev];
                 const productToUpdate = { ...productsCopy[existingProductIndex] };
                 productToUpdate.batches = [...productToUpdate.batches, newBatch];
+                productToUpdate.isOrdered = false; // Mark as received
                 productsCopy[existingProductIndex] = productToUpdate;
                 updatedProduct = productToUpdate;
                 return productsCopy;
@@ -519,6 +804,7 @@ const Inventory: React.FC = () => {
                 if (existingProductIndex > -1) {
                     const productToUpdate = { ...productsCopy[existingProductIndex] };
                     productToUpdate.batches.push(newBatch);
+                    productToUpdate.isOrdered = false; // Also handle for bulk upload
                     productsCopy[existingProductIndex] = productToUpdate;
                     productId = productToUpdate.id;
                 } else {
@@ -567,6 +853,7 @@ const Inventory: React.FC = () => {
         setSearchTerm('');
         setCategoryFilter('All Categories');
         handleStatusFilterChange('all');
+        setTagFilter('all');
     };
     
     const getProductStatus = (product: { totalStock: number; minStock?: number }): { text: StockStatus; color: string } => {
@@ -641,10 +928,89 @@ const Inventory: React.FC = () => {
             URL.revokeObjectURL(url);
         }
     };
+    
+    const handleMarkOrderLater = (productId: string) => {
+        setProducts(products.map(p => p.id === productId ? { ...p, orderLater: !p.orderLater } : p));
+        setOpenActionsMenu(null);
+    };
 
+    const handleAddToOrder = (product: Product) => {
+        const productPurchases = purchases.filter(p => p.items.some(item => item.productId === product.id));
+        let bestSupplierId = '';
+        let bestRate = Infinity;
+        let bestMrp = 0;
+
+        if (productPurchases.length > 0) {
+            productPurchases.forEach(p => {
+                p.items.forEach(item => {
+                    if (item.productId === product.id && item.price < bestRate) {
+                        bestRate = item.price;
+                        bestSupplierId = p.supplierId;
+                        bestMrp = product.batches.find(b => b.id === item.batchId)?.mrp || 0;
+                    }
+                })
+            });
+        } else {
+            const supplierWithBestDiscount = suppliers.sort((a, b) => b.defaultDiscount - a.defaultDiscount)[0];
+            if (supplierWithBestDiscount) {
+                bestSupplierId = supplierWithBestDiscount.id;
+            }
+        }
+        
+        if (!bestSupplierId && suppliers.length > 0) {
+             bestSupplierId = suppliers[0].id;
+        }
+
+        const typicalBatch = product.batches.find(b => b.stock > 0);
+        if (bestRate === Infinity) bestRate = typicalBatch ? typicalBatch.price : 0;
+        if (bestMrp === 0) bestMrp = typicalBatch ? typicalBatch.mrp : 0;
+
+        setOrderList(prev => {
+            if (prev.some(item => item.productId === product.id)) return prev;
+            const newOrderItem: OrderListItem = {
+                productId: product.id,
+                productName: product.name,
+                manufacturer: product.manufacturer,
+                pack: product.pack,
+                selectedSupplierId: bestSupplierId,
+                quantity: 1,
+                rate: bestRate,
+                mrp: bestMrp
+            };
+            return [...prev, newOrderItem];
+        });
+        setOpenActionsMenu(null);
+    };
+    
+    const handleUpdateProduct = (updatedProduct: Product) => {
+        setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
+        setProductToEdit(null);
+    };
+
+    const handleDeleteProduct = (productId: string) => {
+        setProducts(prev => prev.filter(p => p.id !== productId));
+        setProductToDelete(null);
+    };
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-secondary/50 min-h-full">
+            <div>
+                <div className="flex flex-wrap gap-4 justify-between items-center mb-6">
+                    <h1 className="text-3xl font-bold text-foreground">Inventory Management</h1>
+                    <p className="text-[var(--foreground)]/70 mt-1">Monitor stock levels and manage inventory</p></div>
+                    <div className="flex items-center space-x-2">
+                        <button onClick={handleExport} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm">
+                            <ExportIcon className="mr-2 h-4 w-4" /> Export Report
+                        </button>
+                        <button onClick={() => setIsBulkUploadModalOpen(true)} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm">
+                            <UploadIcon className="mr-2 h-4 w-4" /> Bulk Upload
+                        </button>
+                        <button onClick={() => setIsModalOpen(true)} className="flex items-center px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 font-semibold shadow-sm text-sm">
+                            <PlusIcon className="mr-2 h-4 w-4" /> Add Stock
+                        </button>
+                    </div>
+                
+            </div>
             {lowStockCount > 0 && (
                 <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mb-6 rounded-r-lg">
                     <div className="flex">
@@ -666,6 +1032,14 @@ const Inventory: React.FC = () => {
                     <div className="flex-grow" style={{flexBasis: '300px'}}><label className="text-sm font-semibold text-muted-foreground mb-1 block">Search</label><input type="text" placeholder="Medicine name, manufacturer, batch..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full p-2.5 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"/></div>
                     <div className="flex-grow" style={{flexBasis: '200px'}}><label className="text-sm font-semibold text-muted-foreground mb-1 block">Category</label><select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="w-full p-2.5 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"><option disabled>Select Category</option>{allCategories.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                     <div className="flex-grow" style={{flexBasis: '200px'}}><label className="text-sm font-semibold text-muted-foreground mb-1 block">Stock Status</label><select value={statusFilter} onChange={e => handleStatusFilterChange(e.target.value as StockStatusFilter)} className="w-full p-2.5 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"><option value="all">All Items</option><option value="low_stock">Low Stock</option><option value="out_of_stock">Out of Stock</option></select></div>
+                    <div className="flex-grow" style={{flexBasis: '200px'}}>
+                        <label className="text-sm font-semibold text-muted-foreground mb-1 block">Tags</label>
+                        <select value={tagFilter} onChange={e => setTagFilter(e.target.value as TagFilter)} className="w-full p-2.5 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring">
+                            <option value="all">All Tags</option>
+                            <option value="ordered">Ordered</option>
+                            <option value="order_later">Order Later</option>
+                        </select>
+                    </div>
                     <button onClick={handleClearFilters} className="px-4 py-2.5 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm">Clear Filters</button>
                     <div className="flex-grow text-right text-sm text-muted-foreground" style={{flexBasis: '100px'}}>Showing {filteredProducts.length} items</div>
                 </div>
@@ -674,17 +1048,7 @@ const Inventory: React.FC = () => {
             <div className="bg-card rounded-xl border border-border">
                 <div className="p-4 sm:p-5 border-b border-border flex flex-wrap gap-3 justify-between items-center">
                     <h2 className="text-xl font-bold text-foreground">Inventory Items</h2>
-                    <div className="flex items-center space-x-2">
-                        <button onClick={handleExport} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm">
-                            <ExportIcon className="mr-2 h-4 w-4" /> Export Report
-                        </button>
-                        <button onClick={() => setIsBulkUploadModalOpen(true)} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm">
-                            <UploadIcon className="mr-2 h-4 w-4" /> Bulk Upload
-                        </button>
-                        <button onClick={() => setIsModalOpen(true)} className="flex items-center px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 font-semibold shadow-sm text-sm">
-                            <PlusIcon className="mr-2 h-4 w-4" /> Add Stock
-                        </button>
-                    </div>
+                    
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm text-left text-foreground min-w-[1000px]">
@@ -723,8 +1087,10 @@ const Inventory: React.FC = () => {
                                             </button>
                                         </td>
                                         <td className="px-4 py-3 font-medium">
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex items-center gap-2 flex-wrap">
                                                 <span>{product.name}</span>
+                                                {product.orderLater && <span className="px-2 py-0.5 text-xs font-bold rounded bg-blue-100 text-blue-700">Order Later</span>}
+                                                {product.isOrdered && <span className="px-2 py-0.5 text-xs font-bold rounded bg-purple-100 text-purple-700">Ordered</span>}
                                                 {schedule !== 'none' && <span className={`px-2 py-0.5 text-xs font-bold rounded ${scheduleColors[schedule]}`}>{`Sch ${schedule.toUpperCase()}`}</span>}
                                             </div>
                                             <p className="text-xs text-muted-foreground">{product.manufacturer}</p>
@@ -733,7 +1099,21 @@ const Inventory: React.FC = () => {
                                         <td className="px-4 py-3"><p className="font-bold text-base">{product.totalStock}</p><p className="text-xs text-muted-foreground">Min: {product.minStock || 20}</p></td>
                                         <td className="px-4 py-3 font-semibold">₹{totalValue.toFixed(2)}</td>
                                         <td className="px-4 py-3"><span className={`px-2 py-1 text-xs font-bold rounded-full ${status.color}`}>{status.text}</span></td>
-                                        <td className="px-4 py-3"><button className="text-muted-foreground hover:text-foreground"><ActionsIcon /></button></td>
+                                        <td className="px-4 py-3 relative">
+                                            <button onClick={(e) => { e.stopPropagation(); setOpenActionsMenu(product.id === openActionsMenu ? null : product.id); }} className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-border">
+                                                <ActionsIcon />
+                                            </button>
+                                            {openActionsMenu === product.id && (
+                                                <div ref={actionsMenuRef} className="absolute right-4 mt-2 w-48 bg-card border border-border rounded-lg shadow-xl z-20">
+                                                    <ul className="py-1">
+                                                        <li><button onClick={(e) => { e.stopPropagation(); handleAddToOrder(product); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Add to Order List</button></li>
+                                                        <li><button onClick={(e) => { e.stopPropagation(); handleMarkOrderLater(product.id); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Mark to Order Later</button></li>
+                                                        <li><button onClick={(e) => { e.stopPropagation(); setProductToEdit(product); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Edit</button></li>
+                                                        <li><button onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm text-destructive hover:bg-secondary">Delete</button></li>
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </td>
                                     </tr>
                                     {isExpanded && (
                                         <tr id={`batches-${product.id}`} className="bg-secondary/40">
@@ -793,6 +1173,8 @@ const Inventory: React.FC = () => {
                 </div>
             </div>
 
+            <PurchaseOrderList />
+
             <AddStockModal 
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
@@ -804,6 +1186,16 @@ const Inventory: React.FC = () => {
                 onClose={() => setIsBulkUploadModalOpen(false)}
                 onSave={handleBulkSave}
                 suppliers={suppliers}
+            />
+            <EditProductModal
+                product={productToEdit}
+                onClose={() => setProductToEdit(null)}
+                onSave={handleUpdateProduct}
+            />
+            <DeleteConfirmationModal
+                product={productToDelete}
+                onClose={() => setProductToDelete(null)}
+                onConfirm={handleDeleteProduct}
             />
         </div>
     );

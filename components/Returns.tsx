@@ -1,4 +1,4 @@
-import React, { useState, useContext, useMemo } from 'react';
+import React, { useState, useContext, useMemo, useEffect } from 'react';
 import { AppContext } from '../App';
 import { Transaction, Purchase, Product, Supplier, ReturnItem, CustomerReturn, SupplierReturn, Voucher, CreditNote, LedgerEntry, PurchaseItem, TransactionItem, Batch } from '../types';
 import { SearchIcon, XIcon, PrintIcon } from './Icons';
@@ -315,7 +315,7 @@ const CreditNoteModal: React.FC<{
                     <div className="bg-secondary p-2 rounded-lg text-sm mb-4">
                         <p className="font-semibold">Reference:</p>
                         <p>Original Invoice: {originalPurchase.invoiceNumber || originalPurchase.id.slice(-6)}</p>
-                        <p>Dated: {new Date(originalPurchase.date).toLocaleDateString('en-GB')}</p>
+                        <p>Dated: ${new Date(originalPurchase.date).toLocaleDateString('en-GB')}</p>
                     </div>
                     <h3 className="font-semibold mb-2 text-sm">Items Returned:</h3>
                     <table className="w-full text-sm text-left"><thead className="text-xs text-muted-foreground uppercase bg-secondary"><tr><th className="px-4 py-2">Item</th><th className="px-4 py-2 text-center">Qty</th><th className="px-4 py-2 text-right">Rate</th><th className="px-4 py-2 text-right">Amount</th></tr></thead><tbody>
@@ -336,7 +336,8 @@ const CreditNoteModal: React.FC<{
 const Returns: React.FC = () => {
     const { 
         products, setProducts, transactions, purchases, suppliers,
-        setCustomerReturns, setSupplierReturns, setVouchers, setCreditNotes, setLedger 
+        setCustomerReturns, setSupplierReturns, setVouchers, setCreditNotes, setLedger,
+        returnInitiationData, setReturnInitiationData
     } = useContext(AppContext);
 
     const [activeTab, setActiveTab] = useState<'customer' | 'supplier'>('customer');
@@ -348,6 +349,29 @@ const Returns: React.FC = () => {
     const [viewedInvoice, setViewedInvoice] = useState<Transaction | Purchase | null>(null);
     const [successMessage, setSuccessMessage] = useState('');
     const [printableVoucher, setPrintableVoucher] = useState<Voucher | null>(null);
+
+    useEffect(() => {
+        if (returnInitiationData) {
+            setActiveTab('supplier');
+            const purchase = purchases.find(p => p.items.some(item => item.batchId === returnInitiationData.batchId));
+            if (purchase) {
+                setSearchResult(purchase);
+                const product = products.find(p => p.id === returnInitiationData.productId);
+                const batch = product?.batches.find(b => b.id === returnInitiationData.batchId);
+                const purchaseItem = purchase.items.find(item => item.batchId === returnInitiationData.batchId);
+                
+                if (batch && purchaseItem) {
+                    const key = `${returnInitiationData.productId}-${returnInitiationData.batchId}`;
+                    const newCart = new Map();
+                    newCart.set(key, { item: purchaseItem, returnQuantity: batch.stock });
+                    setReturnCart(newCart);
+                }
+            } else {
+                setSuccessMessage("Could not find the original purchase invoice for the selected expiring item.");
+            }
+            setReturnInitiationData(null);
+        }
+    }, [returnInitiationData, purchases, products, setReturnInitiationData]);
 
 
     const handleSearch = () => {

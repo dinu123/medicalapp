@@ -1,6 +1,6 @@
 import React, { useState, useContext, useMemo, useEffect, useRef } from 'react';
 import { AppContext } from '../App';
-import { Product, CartItem, Transaction, Voucher } from '../types';
+import { Product, CartItem, Transaction, Voucher, Batch } from '../types';
 import { XIcon, SearchIcon, CashIcon, CardIcon, UpiIcon, PrintIcon, CreditIcon } from './Icons';
 
 // Helper function to extract units per pack (e.g., tablets, capsules)
@@ -94,14 +94,17 @@ const InvoiceModal: React.FC<{
                                 const batch = product?.batches.find(b => b.id === item.batchId);
                                 const unitsPerPack = product ? getUnitsInPack(product.pack) : 1;
                                 const pricePerUnit = item.price / unitsPerPack;
+                                const hasSaleDiscount = batch?.saleDiscount && batch.saleDiscount > 0;
+                                const finalPricePerUnit = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
+
                                 return `<tr class="border-b">
                                     <td class="px-4 py-2">${index + 1}</td>
                                     <td class="px-4 py-2 font-semibold">${item.productName}<br><span class="text-xs text-gray-500 print-text-muted">HSN: ${product?.hsnCode || 'N/A'}</span></td>
                                     <td class="px-4 py-2">${batch?.batchNumber || ''}</td>
                                     <td class="px-4 py-2">${batch?.expiryDate.split('-').reverse().join('-') || ''}</td>
                                     <td class="px-4 py-2 text-center">${item.quantity}</td>
-                                    <td class="px-4 py-2 text-right">₹${pricePerUnit.toFixed(2)}</td>
-                                    <td class="px-4 py-2 text-right">₹${(pricePerUnit * item.quantity).toFixed(2)}</td>
+                                    <td class="px-4 py-2 text-right">₹${finalPricePerUnit.toFixed(2)}</td>
+                                    <td class="px-4 py-2 text-right">₹${(finalPricePerUnit * item.quantity).toFixed(2)}</td>
                                 </tr>`;
                             }).join('')}
                         </tbody>
@@ -186,6 +189,8 @@ const InvoiceModal: React.FC<{
                                     const batch = product?.batches.find(b => b.id === item.batchId);
                                     const unitsPerPack = product ? getUnitsInPack(product.pack) : 1;
                                     const pricePerUnit = item.price / unitsPerPack;
+                                    const hasSaleDiscount = batch?.saleDiscount && batch.saleDiscount > 0;
+                                    const finalPricePerUnit = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
 
                                     return (
                                         <tr key={item.productId + item.batchId} className="border-b border-border">
@@ -194,8 +199,8 @@ const InvoiceModal: React.FC<{
                                             <td className="px-4 py-2">{batch?.batchNumber}</td>
                                             <td className="px-4 py-2">{batch?.expiryDate.split('-').reverse().join('-')}</td>
                                             <td className="px-4 py-2 text-center">{item.quantity}</td>
-                                            <td className="px-4 py-2 text-right">₹{pricePerUnit.toFixed(2)}</td>
-                                            <td className="px-4 py-2 text-right">₹{(pricePerUnit * item.quantity).toFixed(2)}</td>
+                                            <td className="px-4 py-2 text-right">₹{finalPricePerUnit.toFixed(2)}</td>
+                                            <td className="px-4 py-2 text-right">₹{(finalPricePerUnit * item.quantity).toFixed(2)}</td>
                                         </tr>
                                     );
                                 })}
@@ -348,10 +353,16 @@ const Sell: React.FC = () => {
     const billSummary = useMemo(() => {
         const subTotal = cart.reduce((total, item) => {
             const product = products.find(p => p.id === item.productId);
-            if (!product) return total;
+            const batch = product?.batches.find(b => b.id === item.batchId);
+            if (!product || !batch) return total;
+            
             const unitsPerPack = getUnitsInPack(product.pack);
             const pricePerUnit = item.price / unitsPerPack;
-            return total + pricePerUnit * item.quantity;
+            
+            const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
+            const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
+
+            return total + effectivePrice * item.quantity;
         }, 0);
 
         const discountAmount = subTotal * (discount / 100);
@@ -370,13 +381,16 @@ const Sell: React.FC = () => {
 
         cart.forEach(item => {
             const product = products.find(p => p.id === item.productId);
-            if (!product) return;
+            const batch = product?.batches.find(b => b.id === item.batchId);
+            if (!product || !batch) return;
 
             const unitsPerPack = getUnitsInPack(product.pack);
             const pricePerUnit = item.price / unitsPerPack;
-            const itemSubTotal = pricePerUnit * item.quantity;
+            const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
+            const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
+            const itemSubTotal = effectivePrice * item.quantity;
             
-            // Distribute discounts proportionally
+            // Distribute bill-wide discounts proportionally
             const itemProportionalValue = subTotal > 0 ? (itemSubTotal / subTotal) * (subTotal - discountAmount - voucherDiscount) : 0;
             
             const taxRate = item.tax;
@@ -492,21 +506,39 @@ const Sell: React.FC = () => {
                         <tbody>
                             {cart.length === 0 && <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">Your cart is empty.</td></tr>}
                             {cart.map(item => {
-                                const product = products.find(p => p.id === item.productId)!; const batch = product.batches.find(b => b.id === item.batchId)!;
-                                const unitsPerPack = getUnitsInPack(product.pack); const isStripItem = unitsPerPack > 1;
+                                const product = products.find(p => p.id === item.productId)!; 
+                                const batch = product.batches.find(b => b.id === item.batchId)!;
+                                const unitsPerPack = getUnitsInPack(product.pack); 
+                                const isStripItem = unitsPerPack > 1;
                                 const pricePerUnit = item.price / unitsPerPack;
+                                const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
+                                const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
                                 const strips = isStripItem ? Math.floor(item.quantity / unitsPerPack) : 0;
                                 const units = isStripItem ? item.quantity % unitsPerPack : item.quantity;
                                 return (
                                 <tr key={item.productId + item.batchId} className="border-t border-border">
-                                    <td className="px-4 py-3"><p className="font-semibold">{item.productName}</p><div className="flex items-center gap-2"><p className="text-xs text-muted-foreground">Batch: {batch.batchNumber}</p>{!isRghs && <span className="px-1.5 py-0.5 text-xs font-semibold rounded-full bg-primary/10 text-primary">GST {item.tax}%</span>}</div></td>
+                                    <td className="px-4 py-3">
+                                        <p className="font-semibold">{item.productName}</p>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <p className="text-xs text-muted-foreground">Batch: {batch.batchNumber}</p>
+                                            {!isRghs && <span className="px-1.5 py-0.5 text-xs font-semibold rounded-full bg-primary/10 text-primary">GST {item.tax}%</span>}
+                                            {hasSaleDiscount && <span className="px-1.5 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Discounted</span>}
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-3">
                                         <div className="flex items-center gap-1.5">
                                              {isStripItem ? (<><input type="number" min="0" value={strips || ''} onChange={e => handleQuantityChange(item.productId, item.batchId, product.pack, e.target.value, String(units))} className="w-14 p-1.5 text-center border border-border rounded-md bg-input" placeholder="Strips"/><span>/</span><input type="number" min="0" value={units || ''} onChange={e => handleQuantityChange(item.productId, item.batchId, product.pack, String(strips), e.target.value)} className="w-14 p-1.5 text-center border border-border rounded-md bg-input" placeholder={product.pack.includes('cap')?'Caps':'Tabs'}/></>) : (<input type="number" min="0" value={units || ''} onChange={e => handleQuantityChange(item.productId, item.batchId, product.pack, '0', e.target.value)} className="w-14 p-1.5 text-center border border-border rounded-md bg-input" placeholder="Qty"/>)}
                                         </div>
                                     </td>
-                                    <td className="px-4 py-3 text-right">₹{pricePerUnit.toFixed(2)}</td>
-                                    <td className="px-4 py-3 text-right font-bold">₹{(pricePerUnit * item.quantity).toFixed(2)}</td>
+                                    <td className="px-4 py-3 text-right">
+                                        {hasSaleDiscount ? (
+                                            <div>
+                                                <del className="text-xs text-muted-foreground">₹{pricePerUnit.toFixed(2)}</del>
+                                                <p>₹{effectivePrice.toFixed(2)}</p>
+                                            </div>
+                                        ) : `₹${pricePerUnit.toFixed(2)}`}
+                                    </td>
+                                    <td className="px-4 py-3 text-right font-bold">₹{(effectivePrice * item.quantity).toFixed(2)}</td>
                                     <td className="px-4 py-3 text-center"><button onClick={() => removeFromCart(item.productId, item.batchId)} className="text-destructive hover:text-destructive/80"><XIcon className="w-5 h-5"/></button></td>
                                 </tr>
                             )})}

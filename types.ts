@@ -9,6 +9,7 @@ export interface Batch {
   mrp: number;
   price: number; // Rate
   discount: number; // Percentage
+  saleDiscount?: number; // Percentage discount for expiring items
 }
 
 export interface Product {
@@ -22,6 +23,8 @@ export interface Product {
   batches: Batch[];
   category?: string;
   minStock?: number;
+  orderLater?: boolean;
+  isOrdered?: boolean;
 }
 
 export interface Supplier {
@@ -141,7 +144,7 @@ export interface LedgerEntry {
 }
 
 
-export type Page = 'dashboard' | 'analytics' | 'billing' | 'transaction-history' | 'inventory' | 'gemini' | 'suppliers' | 'expiring' | 'tax' | 'profile' | 'settings' | 'returns' | 'vouchers';
+export type Page = 'dashboard' | 'analytics' | 'billing' | 'transaction-history' | 'inventory' | 'gemini' | 'suppliers' | 'expiring' | 'tax' | 'profile' | 'settings' | 'returns' | 'vouchers' | 'purchase-orders';
 
 export interface CartItem {
     productId: string;
@@ -169,6 +172,26 @@ export interface GstSettings {
   subsidized: number;
   general: number;
   food: number;
+}
+
+export interface OrderListItem {
+  productId: string;
+  productName: string;
+  manufacturer: string;
+  pack: string;
+  selectedSupplierId: string;
+  quantity: number;
+  rate: number;
+  mrp: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  supplierId: string;
+  items: OrderListItem[];
+  createdDate: string; // ISO string
+  status: 'ordered' | 'completed';
+  totalValue: number;
 }
 
 export interface AppContextType {
@@ -203,4 +226,10 @@ export interface AppContextType {
     setCreditNotes: React.Dispatch<React.SetStateAction<CreditNote[]>>;
     ledger: LedgerEntry[];
     setLedger: React.Dispatch<React.SetStateAction<LedgerEntry[]>>;
+    orderList: OrderListItem[];
+    setOrderList: React.Dispatch<React.SetStateAction<OrderListItem[]>>;
+    purchaseOrders: PurchaseOrder[];
+    setPurchaseOrders: React.Dispatch<React.SetStateAction<PurchaseOrder[]>>;
+    returnInitiationData: { productId: string; batchId: string } | null;
+    setReturnInitiationData: React.Dispatch<React.SetStateAction<{ productId: string; batchId: string } | null>>;
 }
