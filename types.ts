@@ -38,16 +38,26 @@ export interface Supplier {
   defaultDiscount: number; // Percentage
 }
 
+export interface Customer {
+  id: string;
+  name: string;
+  contact: string;
+  address?: string;
+  gstin?: string;
+}
+
 export interface TransactionItem {
   productId: string;
   productName: string;
   quantity: number;
-  price: number;
+  price: number; // This is the MRP per pack
+  tax: number;
   batchId: string;
 }
 
 export interface Transaction {
   id: string;
+  customerId?: string; // Link to customer
   customerName?: string;
   doctorName?: string;
   doctorRegNo?: string;
@@ -134,17 +144,47 @@ export interface CreditNote {
   status: 'open' | 'applied';
 }
 
-export interface LedgerEntry {
-  id: string;
-  date: string;
+export enum Account {
+  // Parties
+  Customer = 'Customer',
+  Supplier = 'Supplier',
+  // Assets
+  Cash = 'Cash',
+  Bank = 'Bank',
+  // Liabilities
+  VouchersPayable = 'VouchersPayable',
+  // Revenue
+  Sales = 'Sales',
+  // Expenses
+  Purchases = 'Purchases',
+  // Contra Revenue/Expense
+  SalesReturn = 'SalesReturn',
+  PurchaseReturn = 'PurchaseReturn',
+  // Tax Accounts
+  SGST_Input = 'SGST_Input',
+  CGST_Input = 'CGST_Input',
+  SGST_Output = 'SGST_Output',
+  CGST_Output = 'CGST_Output',
+}
+
+export interface JournalTransaction {
+  accountId: string; // e.g., 'CUST-123', 'SUPP-456', 'AC-CASH'
+  accountName: string; // e.g., 'Ramesh Kumar', 'Global Pharma', 'Cash Account'
   type: 'debit' | 'credit';
   amount: number;
-  description: string;
-  relatedId: string; // ID of the transaction, return, voucher, etc.
+}
+
+export interface JournalEntry {
+  id: string; // e.g., 'JE-SALE-12345'
+  date: string; // ISO String
+  referenceId: string; // ID of the sale, purchase, payment, etc.
+  referenceType: 'Sale' | 'Purchase' | 'Payment' | 'Receipt' | 'CustomerReturn' | 'SupplierReturn';
+  narration: string; // Brief description of the transaction
+  transactions: [JournalTransaction, JournalTransaction, ...JournalTransaction[]]; // Must have at least two entries
 }
 
 
-export type Page = 'dashboard' | 'analytics' | 'billing' | 'transaction-history' | 'inventory' | 'gemini' | 'suppliers' | 'expiring' | 'tax' | 'profile' | 'settings' | 'returns' | 'vouchers' | 'purchase-orders';
+export type Page = 'dashboard' | 'analytics' | 'billing' | 'transaction-history' | 'inventory' | 'gemini' | 'suppliers' | 'expiring' | 'tax' | 'profile' | 'settings' | 'returns' | 'vouchers' | 'purchase-orders' | 'ledgers';
 
 export interface CartItem {
     productId: string;
@@ -203,12 +243,16 @@ export interface AppContextType {
     setPurchases: React.Dispatch<React.SetStateAction<Purchase[]>>;
     suppliers: Supplier[];
     setSuppliers: React.Dispatch<React.SetStateAction<Supplier[]>>;
+    customers: Customer[];
+    setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
+    journal: JournalEntry[];
+    addJournalEntry: (entry: Omit<JournalEntry, 'id'>) => void;
     activePage: Page;
     setActivePage: (page: Page) => void;
     cart: CartItem[];
     addToCart: (product: Product) => void;
-    updateCartQuantity: (productId: string, batchId: string, newQuantity: number) => void;
-    removeFromCart: (productId: string, batchId: string) => void;
+    updateProductQuantityInCart: (productId: string, totalQuantity: number) => void;
+    removeProductFromCart: (productId: string) => void;
     clearCart: () => void;
     inventoryFilter: InventoryFilter;
     setInventoryFilter: (filter: InventoryFilter) => void;
@@ -224,12 +268,11 @@ export interface AppContextType {
     setVouchers: React.Dispatch<React.SetStateAction<Voucher[]>>;
     creditNotes: CreditNote[];
     setCreditNotes: React.Dispatch<React.SetStateAction<CreditNote[]>>;
-    ledger: LedgerEntry[];
-    setLedger: React.Dispatch<React.SetStateAction<LedgerEntry[]>>;
     orderList: OrderListItem[];
     setOrderList: React.Dispatch<React.SetStateAction<OrderListItem[]>>;
     purchaseOrders: PurchaseOrder[];
     setPurchaseOrders: React.Dispatch<React.SetStateAction<PurchaseOrder[]>>;
     returnInitiationData: { productId: string; batchId: string } | null;
     setReturnInitiationData: React.Dispatch<React.SetStateAction<{ productId: string; batchId: string } | null>>;
+    findOrCreateCustomer: (name: string, contact: string) => Customer;
 }

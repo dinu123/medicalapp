@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Page } from '../types';
-import { DashboardIcon, AnalyticsIcon, TransactionsIcon, InventoryIcon, SuppliersIcon, ExpiringIcon, TaxIcon, ProfileIcon, SettingsIcon, ChevronDownIcon, SparklesIcon, ReturnIcon, VoucherIcon } from './Icons';
+import { DashboardIcon, AnalyticsIcon, TransactionsIcon, InventoryIcon, SuppliersIcon, ExpiringIcon, TaxIcon, ProfileIcon, SettingsIcon, ChevronDownIcon, SparklesIcon, ReturnIcon, VoucherIcon, LedgersIcon } from './Icons';
 
 interface SidebarProps {
   activePage: Page;
@@ -77,6 +77,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
     { id: 'suppliers', label: 'Suppliers', icon: <SuppliersIcon />, page: 'suppliers' },
     { id: 'returns', label: 'Returns', icon: <ReturnIcon />, page: 'returns' },
     { id: 'vouchers', label: 'Vouchers', icon: <VoucherIcon />, page: 'vouchers' },
+    { id: 'ledgers', label: 'Ledgers', icon: <LedgersIcon />, page: 'ledgers' },
     { id: 'tax', label: 'Tax Reports', icon: <TaxIcon />, page: 'tax', disabled: true },
     { id: 'profile', label: 'My Profile', icon: <ProfileIcon />, page: 'profile', disabled: true },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon />, page: 'settings' },

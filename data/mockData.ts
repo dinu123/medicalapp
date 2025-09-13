@@ -1,4 +1,4 @@
-import { Product, Transaction, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier } from '../types';
+import { Product, Transaction, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier, Customer } from '../types';
 
 // Base product templates for realistic data generation
 const productTemplates = [
@@ -22,7 +22,16 @@ const productTemplates = [
   { baseName: 'Band-Aid Assorted', hsn: '30051090', pack: '100 pcs', mfr: 'FirstAid Co.', tax: 5, salts: 'N/A', schedule: 'none' as MedicineSchedule, category: 'Consumable', minStock: 50 },
 ];
 
-const customerNames = ['Ramesh Kumar', 'Sunita Sharma', 'Amit Patel', 'Priya Singh', 'Vijay Gupta', 'Anjali Verma', 'Sanjay Reddy', 'Pooja Desai'];
+export const initialCustomers: Customer[] = [
+    { id: 'cust_1', name: 'Ramesh Kumar', contact: '9876543210' },
+    { id: 'cust_2', name: 'Sunita Sharma', contact: '9876543211' },
+    { id: 'cust_3', name: 'Amit Patel', contact: '9876543212' },
+    { id: 'cust_4', name: 'Priya Singh', contact: '9876543213' },
+    { id: 'cust_5', name: 'Vijay Gupta', contact: '9876543214' },
+    { id: 'cust_6', name: 'Anjali Verma', contact: '9876543215' },
+    { id: 'cust_7', name: 'Sanjay Reddy', contact: '9876543216' },
+    { id: 'cust_8', name: 'Pooja Desai', contact: '9876543217' },
+];
 
 export const initialSuppliers: Supplier[] = [
     { id: 'supp_1', name: 'Global Pharma', address: '123 Pharma Lane, Mumbai', contact: '9876543210', gstin: '27ABCDE1234F1Z5', dlNumber: 'MH/12345', foodLicenseNumber: 'FSL/98765', defaultDiscount: 10 },
@@ -147,14 +156,17 @@ const generateMockData = () => {
                 batchId: batchToSellFrom.id,
                 quantity,
                 price: batchToSellFrom.mrp,
+                tax: taxRate
             });
 
             // Decrement stock
             batchToSellFrom.stock -= quantity;
+            const customer = initialCustomers[Math.floor(Math.random() * initialCustomers.length)];
 
             transactions.push({
                 id: `trans_${saleDate.getTime()}_${i}`,
-                customerName: customerNames[Math.floor(Math.random() * customerNames.length)],
+                customerId: customer.id,
+                customerName: customer.name,
                 items: itemsInSale,
                 total: parseFloat(saleTotal.toFixed(2)),
                 date: saleDate.toISOString(),

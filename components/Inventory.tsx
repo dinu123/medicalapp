@@ -1,6 +1,6 @@
 import React, { useState, useContext, useMemo, useEffect, useRef } from 'react';
 import { AppContext } from '../App';
-import { Product, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier, InventoryFilterStatus, OrderListItem, PurchaseOrder } from '../types';
+import { Product, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier, InventoryFilterStatus, OrderListItem, PurchaseOrder, JournalTransaction } from '../types';
 import { PlusIcon, XIcon, UploadIcon, TotalItemsIcon, LowStockIcon, OutOfStockIcon, TotalValueIcon, ActionsIcon, ChevronDownIcon, ExportIcon, SearchIcon } from './Icons';
 import BulkUploadModal from './BulkUploadModal';
 import { SupplierModal } from './SupplierModal';
@@ -10,6 +10,17 @@ type NewProductType = 'strip' | 'bottle' | 'tube' | 'other';
 type StockStatus = 'In Stock' | 'Low Stock' | 'Out of Stock';
 type StockStatusFilter = 'all' | 'low_stock' | 'out_of_stock';
 type TagFilter = 'all' | 'ordered' | 'order_later';
+
+interface PurchaseSummary {
+    baseAmount: number;
+    discountAmount: number;
+    subtotal: number;
+    gstAmount: number;
+    total: number;
+    gstRate: number;
+    cgst: number;
+    sgst: number;
+}
 
 
 const AddStockModal: React.FC<{
@@ -21,7 +32,7 @@ const AddStockModal: React.FC<{
         purchaseStatus: PurchaseStatus, 
         supplierId: string,
         purchaseDetails: { invoiceNumber?: string; paymentMethod?: PaymentMethod; notes?: string },
-        totalAmount: number
+        purchaseSummary: PurchaseSummary
     ) => void;
     products: Product[];
 }> = ({ isOpen, onClose, onSave, products }) => {
@@ -89,7 +100,7 @@ const AddStockModal: React.FC<{
         }
     }, [newProductType, stripInfo, liquidInfo, otherPack, existingProduct]);
 
-    const summary = useMemo(() => {
+    const summary: PurchaseSummary = useMemo(() => {
         const { stock, price, discount } = batch;
         const { hsnCode } = product;
 
@@ -197,7 +208,7 @@ const AddStockModal: React.FC<{
             purchaseStatus, 
             selectedSupplierId,
             { invoiceNumber, paymentMethod, notes },
-            summary.total
+            summary
         );
         onClose();
     };
@@ -585,7 +596,7 @@ const PurchaseOrderList: React.FC = () => {
 }
 
 const Inventory: React.FC = () => {
-    const { products, setProducts, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings, orderList, setOrderList } = useContext(AppContext);
+    const { products, setProducts, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings, orderList, setOrderList, addJournalEntry } = useContext(AppContext);
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
@@ -721,10 +732,11 @@ const Inventory: React.FC = () => {
         purchaseStatus: PurchaseStatus,
         supplierId: string,
         purchaseDetails: { invoiceNumber?: string; paymentMethod?: PaymentMethod; notes?: string },
-        totalAmount: number
+        purchaseSummary: PurchaseSummary
     ) => {
         const newBatch: Batch = { ...batchData, id: `batch_${Date.now()}` };
         let updatedProduct: Product;
+        let finalProductId: string;
 
         setProducts(prev => {
             const existingProductIndex = prev.findIndex(p => p.id === productData.id || (productData.name && p.name.toLowerCase() === productData.name.toLowerCase()));
@@ -736,10 +748,12 @@ const Inventory: React.FC = () => {
                 productToUpdate.isOrdered = false; // Mark as received
                 productsCopy[existingProductIndex] = productToUpdate;
                 updatedProduct = productToUpdate;
+                finalProductId = updatedProduct.id;
                 return productsCopy;
             } else {
+                finalProductId = `prod_${Date.now()}`;
                 updatedProduct = {
-                    id: `prod_${Date.now()}`,
+                    id: finalProductId,
                     name: productData.name!,
                     hsnCode: productData.hsnCode!,
                     pack: productData.pack!,
@@ -754,31 +768,57 @@ const Inventory: React.FC = () => {
             }
         });
 
-        const purchaseSubtotal = (newBatch.stock * newBatch.price) * (1 - (newBatch.discount / 100));
+        const newPurchaseId = `purch_${Date.now()}`;
         const newPurchase: Purchase = {
-            id: `purch_${Date.now()}`,
+            id: newPurchaseId,
             supplierId: supplierId,
             status: purchaseStatus,
             invoiceNumber: purchaseDetails.invoiceNumber,
             paymentMethod: purchaseStatus === 'paid' ? purchaseDetails.paymentMethod : undefined,
             notes: purchaseDetails.notes,
             items: [{
-                productId: updatedProduct!.id,
-                productName: updatedProduct!.name,
+                productId: finalProductId!,
+                productName: productData.name!,
                 batchId: newBatch.id,
                 quantity: newBatch.stock,
                 price: newBatch.price,
-                amount: parseFloat(purchaseSubtotal.toFixed(2)),
+                amount: purchaseSummary.subtotal,
             }],
-            total: totalAmount,
+            total: purchaseSummary.total,
             date: new Date().toISOString(),
         };
         setPurchases(prev => [...prev, newPurchase]);
+        
+        // --- Add Journal Entry ---
+        const supplier = suppliers.find(s => s.id === supplierId);
+        const transactions: JournalTransaction[] = [
+            { accountId: 'AC-PURCHASES', accountName: 'Purchases', type: 'debit', amount: purchaseSummary.subtotal },
+            { accountId: 'AC-SGST-INPUT', accountName: 'SGST Input', type: 'debit', amount: purchaseSummary.sgst },
+            { accountId: 'AC-CGST-INPUT', accountName: 'CGST Input', type: 'debit', amount: purchaseSummary.cgst },
+        ];
+        
+        if (purchaseStatus === 'credit') {
+            transactions.push({ accountId: supplierId, accountName: supplier?.name || 'Unknown Supplier', type: 'credit', amount: purchaseSummary.total });
+        } else {
+            const paymentAccount = purchaseDetails.paymentMethod === 'cash' ? 'AC-CASH' : 'AC-BANK';
+            const paymentAccountName = purchaseDetails.paymentMethod === 'cash' ? 'Cash' : 'Bank';
+            transactions.push({ accountId: paymentAccount, accountName: paymentAccountName, type: 'credit', amount: purchaseSummary.total });
+        }
+
+        addJournalEntry({
+            date: new Date().toISOString(),
+            referenceId: newPurchaseId,
+            referenceType: 'Purchase',
+            narration: `Goods purchased from ${supplier?.name || 'Unknown'} via Invoice ${purchaseDetails.invoiceNumber || ''}`,
+            transactions: transactions as [JournalTransaction, JournalTransaction, ...JournalTransaction[]],
+        });
     };
     
      const handleBulkSave = (newProducts: any[], purchaseStatus: PurchaseStatus, supplierId: string) => {
         const timestamp = Date.now();
-        let purchaseTotal = 0;
+        let totalSubtotal = 0;
+        let totalSgst = 0;
+        let totalCgst = 0;
         const purchaseItems: any[] = [];
 
         setProducts(prev => {
@@ -795,16 +835,23 @@ const Inventory: React.FC = () => {
                     discount: newProd.discount,
                 };
                 
-                const purchaseAmount = newProd.amount > 0 ? newProd.amount : (newBatch.stock * newBatch.price) * (1 - (newBatch.discount / 100));
-                purchaseTotal += purchaseAmount;
+                const baseAmount = newBatch.stock * newBatch.price;
+                const discountAmount = baseAmount * (newBatch.discount / 100);
+                const subtotal = baseAmount - discountAmount;
+                const gstRate = getGstRate(newProd.hsnCode);
+                const gstAmount = subtotal * (gstRate / 100);
 
-                const existingProductIndex = productsCopy.findIndex(p => p.name.toLowerCase() === newProd.name.toLowerCase());
+                totalSubtotal += subtotal;
+                totalSgst += gstAmount / 2;
+                totalCgst += gstAmount / 2;
+
                 let productId;
+                const existingProductIndex = productsCopy.findIndex(p => p.name.toLowerCase() === newProd.name.toLowerCase());
 
                 if (existingProductIndex > -1) {
                     const productToUpdate = { ...productsCopy[existingProductIndex] };
                     productToUpdate.batches.push(newBatch);
-                    productToUpdate.isOrdered = false; // Also handle for bulk upload
+                    productToUpdate.isOrdered = false;
                     productsCopy[existingProductIndex] = productToUpdate;
                     productId = productToUpdate.id;
                 } else {
@@ -828,23 +875,47 @@ const Inventory: React.FC = () => {
                     batchId: newBatch.id,
                     quantity: newBatch.stock,
                     price: newBatch.price,
-                    amount: parseFloat(purchaseAmount.toFixed(2)),
+                    amount: subtotal,
                 });
             });
 
             return productsCopy;
         });
+        
+        const grandTotal = totalSubtotal + totalSgst + totalCgst;
+        const newPurchaseId = `purch_bulk_${timestamp}`;
 
         if (purchaseItems.length > 0) {
             const newPurchase: Purchase = {
-                id: `purch_bulk_${timestamp}`,
+                id: newPurchaseId,
                 supplierId,
                 status: purchaseStatus,
                 items: purchaseItems,
-                total: parseFloat(purchaseTotal.toFixed(2)),
+                total: grandTotal,
                 date: new Date().toISOString(),
             };
             setPurchases(prev => [...prev, newPurchase]);
+            
+            // --- Add Journal Entry for Bulk Upload ---
+            const supplier = suppliers.find(s => s.id === supplierId);
+            const transactions: JournalTransaction[] = [
+                { accountId: 'AC-PURCHASES', accountName: 'Purchases', type: 'debit', amount: totalSubtotal },
+                { accountId: 'AC-SGST-INPUT', accountName: 'SGST Input', type: 'debit', amount: totalSgst },
+                { accountId: 'AC-CGST-INPUT', accountName: 'CGST Input', type: 'debit', amount: totalCgst },
+            ];
+             if (purchaseStatus === 'credit') {
+                transactions.push({ accountId: supplierId, accountName: supplier?.name || 'Unknown Supplier', type: 'credit', amount: grandTotal });
+            } else {
+                // Assuming 'bank' as default for bulk paid, can be enhanced later
+                transactions.push({ accountId: 'AC-BANK', accountName: 'Bank', type: 'credit', amount: grandTotal });
+            }
+             addJournalEntry({
+                date: new Date().toISOString(),
+                referenceId: newPurchaseId,
+                referenceType: 'Purchase',
+                narration: `Bulk goods purchased from ${supplier?.name || 'Unknown'}`,
+                transactions: transactions as [JournalTransaction, JournalTransaction, ...JournalTransaction[]],
+            });
         }
     };
 
@@ -994,10 +1065,10 @@ const Inventory: React.FC = () => {
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-secondary/50 min-h-full">
-            <div>
-                <div className="flex flex-wrap gap-4 justify-between items-center mb-6">
+            <div className="flex flex-wrap gap-4 justify-between items-center mb-6">
+                <div>
                     <h1 className="text-3xl font-bold text-foreground">Inventory Management</h1>
-                    <p className="text-[var(--foreground)]/70 mt-1">Monitor stock levels and manage inventory</p></div>
+                    <p className="text-muted-foreground mt-1">Monitor stock levels and manage inventory</p></div>
                     <div className="flex items-center space-x-2">
                         <button onClick={handleExport} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm">
                             <ExportIcon className="mr-2 h-4 w-4" /> Export Report

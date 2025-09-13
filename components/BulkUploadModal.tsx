@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useContext } from 'react';
 import { AppContext } from '../App';
-import { Product, PurchaseStatus, Supplier } from '../types';
+import { Product, PurchaseStatus, Supplier, JournalTransaction } from '../types';
 import { parseInventoryFile } from '../services/geminiService';
 import { XIcon, UploadIcon } from './Icons';
 import { SupplierModal } from './SupplierModal';

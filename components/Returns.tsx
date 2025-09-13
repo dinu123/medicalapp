@@ -1,11 +1,12 @@
 import React, { useState, useContext, useMemo, useEffect } from 'react';
 import { AppContext } from '../App';
-import { Transaction, Purchase, Product, Supplier, ReturnItem, CustomerReturn, SupplierReturn, Voucher, CreditNote, LedgerEntry, PurchaseItem, TransactionItem, Batch } from '../types';
+import { Transaction, Purchase, Product, Supplier, ReturnItem, CustomerReturn, SupplierReturn, Voucher, CreditNote, PurchaseItem, TransactionItem, Batch } from '../types';
 import { SearchIcon, XIcon, PrintIcon } from './Icons';
 
 // Helper function to extract units per pack
 const getUnitsInPack = (pack: string): number => {
-    const match = pack.match(/(\d+)\s*(tab|cap)s?/i);
+    // FIX: Regex now handles "tablet(s)" and "capsule(s)" in addition to "tab(s)" and "cap(s)".
+    const match = pack.match(/(\d+)\s*(tab(let)?|cap(sule)?)s?/i);
     return match ? parseInt(match[1], 10) : 1;
 };
 
@@ -183,7 +184,7 @@ const VoucherPrintModal: React.FC<{
                 <div className="p-6 border-b border-border printable-area" id="voucher-content">
                     <header className="text-center mb-6"><h1 className="text-2xl font-bold">MediStore Pharmacy</h1><p className="text-sm text-muted-foreground">Store Credit Voucher</p></header>
                     <div className="space-y-3 text-center border-y border-dashed py-6">
-                        <p><strong>Customer:</strong> {voucher.customerName || 'Valued Customer'}</p>
+                        <p><strong>Customer:</strong> ${voucher.customerName || 'Valued Customer'}</p>
                         <p><strong>Amount:</strong> <span className="text-2xl font-bold text-primary">₹{voucher.initialAmount.toFixed(2)}</span></p>
                         <p><strong>Voucher ID:</strong> <span className="font-mono bg-secondary px-2 py-1 rounded">{voucher.id}</span></p>
                         <p><strong>Issued On:</strong> {new Date(voucher.createdDate).toLocaleDateString('en-GB')}</p>
@@ -334,9 +335,10 @@ const CreditNoteModal: React.FC<{
 
 
 const Returns: React.FC = () => {
+    // FIX: Replaced setLedger with addJournalEntry from AppContext.
     const { 
         products, setProducts, transactions, purchases, suppliers,
-        setCustomerReturns, setSupplierReturns, setVouchers, setCreditNotes, setLedger,
+        setCustomerReturns, setSupplierReturns, setVouchers, setCreditNotes, addJournalEntry,
         returnInitiationData, setReturnInitiationData
     } = useContext(AppContext);
 
@@ -489,8 +491,17 @@ const Returns: React.FC = () => {
             setVouchers(prev => [...prev, newVoucher]);
             setPrintableVoucher(newVoucher);
         } else {
-            const newLedgerEntry: LedgerEntry = { id: `LEDG-${Date.now()}`, date: new Date().toISOString(), type: 'debit', amount: returnSummary.total, description: `Refund for return ${returnId}`, relatedId: returnId };
-            setLedger(prev => [...prev, newLedgerEntry]);
+            // FIX: Create a balanced journal entry for the cash refund instead of using the non-existent setLedger.
+            addJournalEntry({
+                date: new Date().toISOString(),
+                referenceId: returnId,
+                referenceType: 'CustomerReturn',
+                narration: `Refund for return from invoice ${transaction.id.slice(-6)}`,
+                transactions: [
+                    { accountId: 'AC-SALES-RETURN', accountName: 'Sales Return', type: 'debit', amount: returnSummary.total },
+                    { accountId: 'AC-CASH', accountName: 'Cash', type: 'credit', amount: returnSummary.total }
+                ]
+            });
         }
         setCustomerReturns(prev => [...prev, newReturn]);
         setSuccessMessage('Customer return processed successfully!');
@@ -582,6 +593,18 @@ const Returns: React.FC = () => {
             };
             setCreditNotes(prev => [...prev, newCreditNote]);
             setFinalizedReturn({ creditNote: newCreditNote, supplier, returnItems: newReturnItems, originalPurchase: purchase });
+        } else if (newReturn.settlement.type === 'ledger_adjustment') {
+            // FIX: Added missing journal entry for supplier return ledger adjustments.
+            addJournalEntry({
+                date: new Date().toISOString(),
+                referenceId: returnId,
+                referenceType: 'SupplierReturn',
+                narration: `Adjustment for returned goods to ${supplier.name}`,
+                transactions: [
+                    { accountId: supplier.id, accountName: supplier.name, type: 'debit', amount: returnSummary.total },
+                    { accountId: 'AC-PURCHASE-RETURN', accountName: 'Purchase Return', type: 'credit', amount: returnSummary.total }
+                ]
+            });
         }
         setSupplierReturns(prev => [...prev, newReturn]);
         setSuccessMessage('Supplier return processed successfully!');

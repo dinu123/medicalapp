@@ -1,13 +1,14 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useMemo } from 'react';
 import { AppContext } from '../App';
 import { Supplier } from '../types';
-import { PlusIcon } from './Icons';
+import { PlusIcon, SearchIcon } from './Icons';
 import { SupplierModal } from './SupplierModal';
 
 const Suppliers: React.FC = () => {
     const { suppliers, setSuppliers } = useContext(AppContext);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [supplierToEdit, setSupplierToEdit] = useState<Supplier | null>(null);
+    const [searchTerm, setSearchTerm] = useState('');
 
     const handleOpenModal = (supplier?: Supplier) => {
         setSupplierToEdit(supplier || null);
@@ -30,6 +31,18 @@ const Suppliers: React.FC = () => {
         handleCloseModal();
     };
 
+    const filteredSuppliers = useMemo(() => {
+        if (!searchTerm) {
+            return suppliers;
+        }
+        const lowerCaseSearchTerm = searchTerm.toLowerCase();
+        return suppliers.filter(s =>
+            s.name.toLowerCase().includes(lowerCaseSearchTerm) ||
+            s.contact.toLowerCase().includes(lowerCaseSearchTerm) ||
+            String(s.defaultDiscount).includes(lowerCaseSearchTerm)
+        );
+    }, [suppliers, searchTerm]);
+
     return (
         <div className="p-4 sm:p-6 lg:p-8">
             <div className="flex flex-wrap gap-4 justify-between items-center mb-6">
@@ -39,6 +52,18 @@ const Suppliers: React.FC = () => {
                 </button>
             </div>
 
+            <div className="relative mb-6">
+                <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search by name, contact, discount %..."
+                    className="w-full max-w-lg p-2.5 pl-10 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"
+                    aria-label="Search suppliers"
+                />
+            </div>
+
             <div className="bg-card rounded-xl border border-border overflow-x-auto">
                 <table className="w-full text-sm text-left text-foreground">
                     <thead className="text-xs text-muted-foreground uppercase bg-secondary border-b border-border">
@@ -46,12 +71,14 @@ const Suppliers: React.FC = () => {
                             <th className="px-6 py-3 font-semibold border-r border-border">Name</th>
                             <th className="px-6 py-3 font-semibold border-r border-border">Contact</th>
                             <th className="px-6 py-3 font-semibold border-r border-border">GSTIN</th>
+                            <th className="px-6 py-3 font-semibold border-r border-border">Drug License No.</th>
+                            <th className="px-6 py-3 font-semibold border-r border-border">Food License No.</th>
                             <th className="px-6 py-3 font-semibold border-r border-border">Default Discount</th>
                             <th className="px-6 py-3 font-semibold text-right">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                        {suppliers.map(s => (
+                        {filteredSuppliers.map(s => (
                             <tr key={s.id} className="hover:bg-secondary/50">
                                 <td className="px-6 py-4">
                                     <p className="font-bold">{s.name}</p>
@@ -59,6 +86,8 @@ const Suppliers: React.FC = () => {
                                 </td>
                                 <td className="px-6 py-4">{s.contact}</td>
                                 <td className="px-6 py-4">{s.gstin}</td>
+                                <td className="px-6 py-4">{s.dlNumber}</td>
+                                <td className="px-6 py-4">{s.foodLicenseNumber}</td>
                                 <td className="px-6 py-4">{s.defaultDiscount}%</td>
                                 <td className="px-6 py-4 text-right space-x-2">
                                     <button onClick={() => handleOpenModal(s)} className="font-semibold text-primary hover:underline">Edit</button>
@@ -67,7 +96,7 @@ const Suppliers: React.FC = () => {
                         ))}
                     </tbody>
                 </table>
-                 {suppliers.length === 0 && <p className="text-center py-12 text-muted-foreground">No suppliers found.</p>}
+                 {filteredSuppliers.length === 0 && <p className="text-center py-12 text-muted-foreground">No suppliers found.</p>}
             </div>
 
             <SupplierModal

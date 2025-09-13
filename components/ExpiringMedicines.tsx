@@ -1,7 +1,7 @@
 import React, { useState, useContext, useMemo, useRef, useEffect } from 'react';
 import { AppContext } from '../App';
 import { Product, Batch } from '../types';
-import { ActionsIcon, ExportIcon, XIcon } from './Icons';
+import { ActionsIcon, ExportIcon, XIcon, SearchIcon } from './Icons';
 
 type ExpiryFilter = 'expired' | 15 | 30 | 60 | 90;
 
@@ -67,6 +67,7 @@ const SetDiscountModal: React.FC<{
 const ExpiringMedicines: React.FC = () => {
     const { products, setProducts, purchases, suppliers, setActivePage, setReturnInitiationData } = useContext(AppContext);
     const [filter, setFilter] = useState<ExpiryFilter>(30);
+    const [searchTerm, setSearchTerm] = useState('');
     const [openActionsMenu, setOpenActionsMenu] = useState<string | null>(null);
     const actionsMenuRef = useRef<HTMLDivElement>(null);
     const [batchToDiscount, setBatchToDiscount] = useState<(Batch & {product: Product}) | null>(null);
@@ -108,23 +109,36 @@ const ExpiringMedicines: React.FC = () => {
     const filteredBatches = useMemo(() => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        
+        let dateFilteredBatches;
 
         if (filter === 'expired') {
-            return expiringBatches
+            dateFilteredBatches = expiringBatches
                 .filter(b => new Date(b.expiryDate) < today)
+                .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+        } else {
+            const futureDate = new Date(today);
+            futureDate.setDate(today.getDate() + filter);
+
+            dateFilteredBatches = expiringBatches
+                .filter(b => {
+                    const expiryDate = new Date(b.expiryDate);
+                    return expiryDate >= today && expiryDate <= futureDate;
+                })
                 .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
         }
 
-        const futureDate = new Date(today);
-        futureDate.setDate(today.getDate() + filter);
+        if (!searchTerm) {
+            return dateFilteredBatches;
+        }
 
-        return expiringBatches
-            .filter(b => {
-                const expiryDate = new Date(b.expiryDate);
-                return expiryDate >= today && expiryDate <= futureDate;
-            })
-            .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
-    }, [expiringBatches, filter]);
+        const lowerCaseSearchTerm = searchTerm.toLowerCase();
+        return dateFilteredBatches.filter(b => 
+            b.product.name.toLowerCase().includes(lowerCaseSearchTerm) ||
+            b.supplierName.toLowerCase().includes(lowerCaseSearchTerm) ||
+            b.batchNumber.toLowerCase().includes(lowerCaseSearchTerm)
+        );
+    }, [expiringBatches, filter, searchTerm]);
 
     const FilterButton: React.FC<{ label: string; value: ExpiryFilter; }> = ({ label, value }) => (
         <button
@@ -214,6 +228,18 @@ const ExpiringMedicines: React.FC = () => {
                         <FilterButton label="In 90 Days" value={90} />
                     </div>
                 </div>
+            </div>
+            
+            <div className="relative mb-6">
+                <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search by medicine name, supplier, or batch..."
+                    className="w-full max-w-lg p-2.5 pl-10 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"
+                    aria-label="Search expiring medicines"
+                />
             </div>
 
             <div className="bg-card rounded-xl border border-border overflow-x-auto">

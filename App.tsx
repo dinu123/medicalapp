@@ -11,9 +11,10 @@ import Suppliers from './components/Suppliers';
 import Returns from './components/Returns';
 import Vouchers from './components/Vouchers';
 import PurchaseOrders from './components/PurchaseOrders';
-import { Page, Product, Transaction, Purchase, AppContextType, CartItem, InventoryFilter, TransactionFilter, GstSettings, Supplier, CustomerReturn, SupplierReturn, Voucher, CreditNote, LedgerEntry, OrderListItem, PurchaseOrder } from './types';
+import Ledgers from './components/Ledgers';
+import { Page, Product, Transaction, Purchase, AppContextType, CartItem, InventoryFilter, TransactionFilter, GstSettings, Supplier, CustomerReturn, SupplierReturn, Voucher, CreditNote, JournalEntry, OrderListItem, PurchaseOrder, Customer } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import { initialProducts, initialTransactions, initialPurchases, initialSuppliers } from './data/mockData';
+import { initialProducts, initialTransactions, initialPurchases, initialSuppliers, initialCustomers } from './data/mockData';
 
 const initialInventoryFilter: InventoryFilter = { status: 'all' };
 const initialTransactionFilter: TransactionFilter = { type: 'all', period: 'all' };
@@ -27,12 +28,16 @@ export const AppContext = createContext<AppContextType>({
     setPurchases: () => {},
     suppliers: [],
     setSuppliers: () => {},
+    customers: [],
+    setCustomers: () => {},
+    journal: [],
+    addJournalEntry: () => {},
     activePage: 'dashboard',
     setActivePage: () => {},
     cart: [],
     addToCart: () => {},
-    updateCartQuantity: () => {},
-    removeFromCart: () => {},
+    updateProductQuantityInCart: () => {},
+    removeProductFromCart: () => {},
     clearCart: () => {},
     inventoryFilter: initialInventoryFilter,
     setInventoryFilter: () => {},
@@ -48,14 +53,13 @@ export const AppContext = createContext<AppContextType>({
     setVouchers: () => {},
     creditNotes: [],
     setCreditNotes: () => {},
-    ledger: [],
-    setLedger: () => {},
     orderList: [],
     setOrderList: () => {},
     purchaseOrders: [],
     setPurchaseOrders: () => {},
     returnInitiationData: null,
     setReturnInitiationData: () => {},
+    findOrCreateCustomer: () => ({ id: '', name: '', contact: '' }),
 });
 
 const SettingsPage: React.FC = () => {
@@ -112,6 +116,8 @@ const App: React.FC = () => {
     const [transactions, setTransactions] = useLocalStorage<Transaction[]>('transactions', initialTransactions);
     const [purchases, setPurchases] = useLocalStorage<Purchase[]>('purchases', initialPurchases);
     const [suppliers, setSuppliers] = useLocalStorage<Supplier[]>('suppliers', initialSuppliers);
+    const [customers, setCustomers] = useLocalStorage<Customer[]>('customers', initialCustomers);
+    const [journal, setJournal] = useLocalStorage<JournalEntry[]>('journal', []);
     const [cart, setCart] = useLocalStorage<CartItem[]>('cart', []);
     const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>(initialInventoryFilter);
     const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>(initialTransactionFilter);
@@ -120,69 +126,116 @@ const App: React.FC = () => {
     const [supplierReturns, setSupplierReturns] = useLocalStorage<SupplierReturn[]>('supplierReturns', []);
     const [vouchers, setVouchers] = useLocalStorage<Voucher[]>('vouchers', []);
     const [creditNotes, setCreditNotes] = useLocalStorage<CreditNote[]>('creditNotes', []);
-    const [ledger, setLedger] = useLocalStorage<LedgerEntry[]>('ledger', []);
     const [orderList, setOrderList] = useLocalStorage<OrderListItem[]>('orderList', []);
     const [purchaseOrders, setPurchaseOrders] = useLocalStorage<PurchaseOrder[]>('purchaseOrders', []);
     const [returnInitiationData, setReturnInitiationData] = useState<{ productId: string; batchId: string } | null>(null);
 
+    const addJournalEntry = useCallback((entry: Omit<JournalEntry, 'id'>) => {
+        const totalDebits = entry.transactions.filter(t => t.type === 'debit').reduce((sum, t) => sum + t.amount, 0);
+        const totalCredits = entry.transactions.filter(t => t.type === 'credit').reduce((sum, t) => sum + t.amount, 0);
 
-    const addToCart = useCallback((product: Product) => {
-        // FIFO logic: find the batch with the soonest expiry date that has stock.
-        const fifoBatch = product.batches
-            .filter(b => b.stock > 0)
-            .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0];
-
-        if (!fifoBatch) {
-            alert(`'${product.name}' is out of stock.`);
+        if (Math.abs(totalDebits - totalCredits) > 0.01) {
+            console.error("Journal entry is not balanced!", {entry, totalDebits, totalCredits});
+            // In a real app, you'd show an error to the user.
             return;
         }
 
-        setCart(prevCart => {
-            const existingItem = prevCart.find(item => item.productId === product.id && item.batchId === fifoBatch.id);
+        const newEntry: JournalEntry = {
+            ...entry,
+            id: `JE-${entry.referenceType.toUpperCase()}-${Date.now()}`
+        };
+        setJournal(prev => [...prev, newEntry]);
+    }, [setJournal]);
 
-            if (existingItem) {
-                // If item is already in cart, do nothing.
-                return prevCart;
-            }
-            
-            const taxRate = product.hsnCode.startsWith('3004') ? gstSettings.general : product.hsnCode.startsWith('2106') ? gstSettings.food : gstSettings.subsidized;
+    const findOrCreateCustomer = useCallback((name: string, contact: string): Customer => {
+        if (!name.trim()) {
+            return { id: 'CUST-WALKIN', name: 'Walk-in Customer', contact: '' };
+        }
+        
+        const existingCustomer = customers.find(c => c.name.toLowerCase() === name.toLowerCase().trim());
+        if (existingCustomer) {
+            return existingCustomer;
+        }
+        
+        const newCustomer: Customer = {
+            id: `CUST-${Date.now()}`,
+            name: name.trim(),
+            contact: contact.trim()
+        };
+        setCustomers(prev => [...prev, newCustomer]);
+        return newCustomer;
 
-            return [...prevCart, { 
-                productId: product.id, 
-                productName: product.name, 
-                quantity: 0, // Add with 0 quantity
-                price: fifoBatch.mrp, 
-                tax: taxRate, 
-                batchId: fifoBatch.id 
-            }];
-        });
-    }, [setCart, gstSettings]);
-
-    const updateCartQuantity = useCallback((productId: string, batchId: string, newQuantity: number) => {
+    }, [customers, setCustomers]);
+    
+    const updateProductQuantityInCart = useCallback((productId: string, totalQuantity: number) => {
         setCart(prevCart => {
             const product = products.find(p => p.id === productId);
-            const batch = product?.batches.find(b => b.id === batchId);
-            
-            if (!batch) return prevCart;
-
-            if (newQuantity > batch.stock) {
-                alert(`Quantity cannot exceed available stock for this batch (${batch.stock})`);
-                return prevCart.map(item => item.batchId === batchId ? { ...item, quantity: batch.stock } : item);
+            if (!product) return prevCart;
+    
+            // Remove existing items for this product from cart
+            const otherItemsInCart = prevCart.filter(item => item.productId !== productId);
+    
+            if (totalQuantity <= 0) {
+                return otherItemsInCart;
             }
-            if (newQuantity < 0) return prevCart;
-            
-            return prevCart.map(item => item.batchId === batchId ? { ...item, quantity: newQuantity } : item);
-        });
-    }, [products, setCart]);
+    
+            // Get all available batches for the product, sorted by expiry (FIFO)
+            const availableBatches = product.batches
+                .filter(b => b.stock > 0)
+                .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+    
+            const totalStock = availableBatches.reduce((sum, b) => sum + b.stock, 0);
+            let quantityToFulfill = Math.min(totalQuantity, totalStock);
+    
+            if (totalQuantity > totalStock) {
+                console.warn(`Requested quantity ${totalQuantity} for ${product.name} exceeds total stock of ${totalStock}. Fulfilling with available stock.`);
+            }
+    
+            const newCartItemsForProduct: CartItem[] = [];
+            let remainingQuantity = quantityToFulfill;
+    
+            for (const batch of availableBatches) {
+                if (remainingQuantity <= 0) break;
+    
+                const quantityFromThisBatch = Math.min(remainingQuantity, batch.stock);
+                
+                const taxRate = product.hsnCode.startsWith('3004') ? gstSettings.general : product.hsnCode.startsWith('2106') ? gstSettings.food : gstSettings.subsidized;
 
-    const removeFromCart = useCallback((productId: string, batchId: string) => {
-        setCart(prevCart => prevCart.filter(item => !(item.productId === productId && item.batchId === batchId)));
+                newCartItemsForProduct.push({
+                    productId: product.id,
+                    productName: product.name,
+                    quantity: quantityFromThisBatch,
+                    price: batch.mrp,
+                    tax: taxRate,
+                    batchId: batch.id,
+                });
+    
+                remainingQuantity -= quantityFromThisBatch;
+            }
+    
+            return [...otherItemsInCart, ...newCartItemsForProduct];
+        });
+    }, [products, setCart, gstSettings]);
+
+    const addToCart = useCallback((product: Product) => {
+        const productInCart = cart.some(item => item.productId === product.id);
+        if (productInCart) {
+            // If product is already in cart, do nothing to prevent adding duplicates from search.
+            // User can adjust quantity directly in the cart.
+            return;
+        }
+        // Add product with a quantity of 1 unit.
+        updateProductQuantityInCart(product.id, 1);
+    }, [cart, updateProductQuantityInCart]);
+
+
+    const removeProductFromCart = useCallback((productId: string) => {
+        setCart(prevCart => prevCart.filter(item => item.productId !== productId));
     }, [setCart]);
 
     const clearCart = useCallback(() => {
         setCart([]);
     }, [setCart]);
-
 
     const renderPage = () => {
         switch (activePage) {
@@ -208,6 +261,8 @@ const App: React.FC = () => {
                 return <Returns />;
             case 'vouchers':
                 return <Vouchers />;
+            case 'ledgers':
+                return <Ledgers />;
             case 'settings':
                 return <SettingsPage />;
             default:
@@ -220,8 +275,10 @@ const App: React.FC = () => {
         transactions, setTransactions,
         purchases, setPurchases,
         suppliers, setSuppliers,
+        customers, setCustomers,
+        journal, addJournalEntry,
         activePage, setActivePage,
-        cart, addToCart, updateCartQuantity, removeFromCart, clearCart,
+        cart, addToCart, updateProductQuantityInCart, removeProductFromCart, clearCart,
         inventoryFilter, setInventoryFilter,
         transactionFilter, setTransactionFilter,
         gstSettings, setGstSettings,
@@ -229,10 +286,10 @@ const App: React.FC = () => {
         supplierReturns, setSupplierReturns,
         vouchers, setVouchers,
         creditNotes, setCreditNotes,
-        ledger, setLedger,
         orderList, setOrderList,
         purchaseOrders, setPurchaseOrders,
         returnInitiationData, setReturnInitiationData,
+        findOrCreateCustomer,
     };
 
     return (
