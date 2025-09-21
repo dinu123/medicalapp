@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { Product } from '../types';
+import { Product, Transaction, ParsedPrescription } from '../types';
 
 const API_KEY = process.env.API_KEY;
 
@@ -79,6 +79,62 @@ export const getInventorySummary = async (products: Product[]): Promise<string> 
     return "Failed to generate summary. Please check the console for details.";
   }
 };
+
+export const getInventoryAnalysis = async (products: Product[], transactions: Transaction[]): Promise<string> => {
+    if (!API_KEY) return "API Key not configured.";
+    
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+    const salesLast90Days = transactions
+        .filter(t => new Date(t.date) >= ninetyDaysAgo)
+        .flatMap(t => t.items)
+        .reduce((acc, item) => {
+            acc[item.productId] = (acc[item.productId] || 0) + item.quantity;
+            return acc;
+        }, {} as Record<string, number>);
+
+    const inventoryData = products
+        .map(p => {
+            const totalStock = p.batches.reduce((sum, b) => sum + b.stock, 0);
+            const sales = salesLast90Days[p.id] || 0;
+            const batchesInfo = p.batches
+                .filter(b => b.stock > 0)
+                .map(b => `(Expires: ${b.expiryDate}, Stock: ${b.stock})`)
+                .join(', ');
+
+            return `- Product: ${p.name}, Total Stock: ${totalStock}, Min Stock: ${p.minStock || 20}, Sales (Last 90d): ${sales}, Batches: ${batchesInfo}`;
+        })
+        .join('\n');
+    
+    const prompt = `
+      You are an expert pharmacy inventory analyst. Your task is to analyze the following inventory and sales data to provide actionable insights for the pharmacy owner.
+      
+      The data format is: "Product: [Name], Total Stock: [Current Stock], Min Stock: [Reorder Level], Sales (Last 90d): [Units Sold], Batches: (Expires: [Date], Stock: [Qty]), ..."
+
+      Based on this data, provide a concise summary with the following sections in markdown format:
+
+      1.  **Reorder Urgently**: List up to 5 items that are below their minimum stock level and have high sales velocity. Mention their current stock and recent sales.
+      2.  **Slow-Moving Stock**: Identify up to 5 items with high stock levels but very low or zero sales in the last 90 days. These might be dead stock.
+      3.  **Expiring Soon Alert**: Highlight up to 5 items with significant stock expiring in the next 90 days. Suggest promotions if their sales are low.
+      4.  **Actionable Recommendations**: Give 2-3 clear, strategic recommendations based on your analysis (e.g., "Liquidate expiring stock for Item X with a 20% discount," or "Increase minimum stock for Item Y due to consistent high demand.").
+
+      Inventory and Sales Data:
+      ${inventoryData}
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        return response.text;
+    } catch (error) {
+        console.error("Error generating inventory analysis from Gemini:", error);
+        return "Failed to generate inventory analysis. Please check the console for details.";
+    }
+};
+
 
 const parseNumeric = (value: any): number => {
     let currentVal = value;
@@ -200,5 +256,89 @@ CRITICAL INSTRUCTIONS:
     } catch (error) {
         console.error("Error parsing inventory file with Gemini:", error);
         throw new Error("Failed to parse the file. The file might contain invalid JSON or the AI could not process it correctly.");
+    }
+};
+
+export const parsePrescription = async (file: File): Promise<ParsedPrescription> => {
+    if (!API_KEY) {
+        throw new Error("API Key not configured.");
+    }
+
+    const imagePart = await fileToGenerativePart(file);
+
+    const textPart = {
+        text: `You are an expert AI assistant for pharmacists. Your task is to accurately read a doctor's handwritten or printed prescription from the provided image and extract key details.
+
+CRITICAL INSTRUCTIONS:
+1.  **JSON Output:** Your response MUST be a valid JSON object.
+2.  **Data Extraction:** Extract the following fields:
+    - \`patientName\`: The full name of the patient. If not found, omit this key.
+    - \`doctorName\`: The full name of the doctor. If not found, omit this key.
+    - \`items\`: A JSON array of all prescribed medications. For each medication, extract:
+        - \`medicineName\`: The full name of the medicine, including the strength (e.g., "Paracetamol 500mg", "Amoxicillin 250mg Capsule").
+        - \`quantity\`: The total quantity prescribed (e.g., "10 tablets", "1 strip", "1 bottle").
+        - \`dosage\`: The prescribed dosage instruction (e.g., "1-0-1", "SOS", "once daily").
+3.  **Accuracy:** Be as precise as possible. If a detail is unclear, make a reasonable inference based on common prescription patterns.`
+    };
+    
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: { parts: [textPart, imagePart] },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        patientName: {
+                            type: Type.STRING,
+                            description: "The full name of the patient.",
+                            nullable: true,
+                        },
+                        doctorName: {
+                            type: Type.STRING,
+                            description: "The full name of the prescribing doctor.",
+                            nullable: true,
+                        },
+                        items: {
+                            type: Type.ARRAY,
+                            description: "A list of all medications on the prescription.",
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    medicineName: {
+                                        type: Type.STRING,
+                                        description: "The full name of the medicine, including strength.",
+                                    },
+                                    quantity: {
+                                        type: Type.STRING,
+                                        description: "The total quantity prescribed.",
+                                    },
+                                    dosage: {
+                                        type: Type.STRING,
+                                        description: "The dosage instruction.",
+                                    },
+                                },
+                                required: ["medicineName", "quantity", "dosage"],
+                            },
+                        },
+                    },
+                    required: ["items"],
+                },
+            },
+        });
+        
+        const jsonString = response.text.trim();
+        const parsedData: ParsedPrescription = JSON.parse(jsonString);
+
+        if (typeof parsedData !== 'object' || !Array.isArray(parsedData.items)) {
+            throw new Error("Parsed data is not in the expected format.");
+        }
+        
+        return parsedData;
+
+    } catch (error) {
+        console.error("Error parsing prescription with Gemini:", error);
+        throw new Error("Failed to read the prescription. The AI could not process the image correctly. Please try again with a clearer image.");
     }
 };

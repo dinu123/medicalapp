@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useContext } from 'react';
+import React, { useState, useCallback, useContext, useMemo, useEffect } from 'react';
 import { AppContext } from '../App';
-import { Product, PurchaseStatus, Supplier, JournalTransaction } from '../types';
+import { PurchaseStatus, Supplier, Product, Batch } from '../types';
 import { parseInventoryFile } from '../services/geminiService';
 import { XIcon, UploadIcon } from './Icons';
 import { SupplierModal } from './SupplierModal';
@@ -8,14 +8,14 @@ import { SupplierModal } from './SupplierModal';
 interface BulkUploadModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSave: (products: any[], purchaseStatus: PurchaseStatus, supplierId: string) => void;
+    onSave: (products: any[], purchaseStatus: PurchaseStatus, supplierId: string, sourceFile: File | null) => void;
     suppliers: Supplier[];
 }
 
 type InstructionTab = 'csv' | 'image' | 'pdf';
 
 const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onSave, suppliers }) => {
-    const { setSuppliers } = useContext(AppContext);
+    const { setSuppliers, gstSettings, purchases, journal } = useContext(AppContext);
     const [file, setFile] = useState<File | null>(null);
     const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -25,6 +25,17 @@ const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onSa
     const [purchaseStatus, setPurchaseStatus] = useState<PurchaseStatus>('paid');
     const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
     const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
+    const [step, setStep] = useState<'upload' | 'summary'>('upload');
+    const [supplierCredit, setSupplierCredit] = useState(0);
+    
+    const [purchaseSummary, setPurchaseSummary] = useState({
+        baseAmount: 0,
+        discountAmount: 0,
+        subtotal: 0,
+        gstAmount: 0,
+        total: 0,
+        gstBreakdown: {} as Record<string, { sgst: number, cgst: number }>
+    });
 
 
     const resetState = useCallback(() => {
@@ -39,7 +50,30 @@ const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onSa
         setActiveTab('csv');
         setPurchaseStatus('paid');
         setSelectedSupplierId('');
+        setStep('upload');
+        setSupplierCredit(0);
     }, [imagePreviewUrl]);
+    
+    useEffect(() => {
+        if (selectedSupplierId) {
+            let balance = 0;
+            journal.forEach(entry => {
+                entry.transactions.forEach(t => {
+                    if (t.accountId === selectedSupplierId) {
+                        if (t.type === 'credit') {
+                            balance += t.amount;
+                        } else if (t.type === 'debit') {
+                            balance -= t.amount;
+                        }
+                    }
+                });
+            });
+            setSupplierCredit(balance);
+        } else {
+            setSupplierCredit(0);
+        }
+    }, [selectedSupplierId, journal]);
+
 
     const handleClose = () => {
         resetState();
@@ -96,13 +130,79 @@ const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onSa
         setIsSupplierModalOpen(false);
     };
 
-    const handleConfirmUpload = () => {
+    const getGstRate = (product: any) => {
+        if (product.tax && typeof product.tax === 'number' && product.tax > 0) {
+            return product.tax;
+        }
+        const hsnCode = product.hsnCode || '';
+        return hsnCode.startsWith('3004')
+            ? (gstSettings.general || 12)
+            : hsnCode.startsWith('2106')
+            ? (gstSettings.food || 18)
+            : (gstSettings.subsidized || 5);
+    };
+    
+    const handleReviewPurchase = () => {
         if (!selectedSupplierId) {
-            setError('Please select a supplier.');
+            setError('Please select a supplier before proceeding.');
             return;
         }
-        onSave(parsedProducts, purchaseStatus, selectedSupplierId);
-        handleClose();
+        setError('');
+
+        let baseAmount = 0;
+        let discountAmount = 0;
+        let subtotal = 0;
+        let gstAmount = 0;
+        const gstBreakdown: Record<string, { sgst: number; cgst: number }> = {};
+
+        parsedProducts.forEach(product => {
+            const stock = product.stock || 0;
+            const price = product.price || 0; // This is 'Rate'
+            const parsedDiscountPercent = product.discount;
+            const parsedAmount = product.amount; // This is final line total with tax
+
+            let itemSubtotal: number;
+            let itemBase: number = stock * price;
+            let itemDiscount: number;
+
+            const gstRate = getGstRate(product);
+
+            // Priority 1: If AI provides the final line amount, use it as the source of truth for maximum accuracy.
+            if (typeof parsedAmount === 'number' && parsedAmount > 0) {
+                itemSubtotal = parsedAmount / (1 + gstRate / 100);
+                itemDiscount = itemBase > 0 ? itemBase - itemSubtotal : 0;
+            } 
+            // Priority 2: Fallback to calculating from rate, qty, and discount %.
+            else if (typeof parsedDiscountPercent === 'number' && parsedDiscountPercent >= 0) {
+                itemDiscount = itemBase * (parsedDiscountPercent / 100);
+                itemSubtotal = itemBase - itemDiscount;
+            }
+            // Fallback: If neither is available, assume zero discount.
+            else {
+                itemDiscount = 0;
+                itemSubtotal = itemBase;
+            }
+            
+            // This makes sure discount is not negative in cases where 'rate' might be post-discount.
+            if (itemDiscount < 0) itemDiscount = 0;
+
+            baseAmount += itemBase;
+            discountAmount += itemDiscount;
+            subtotal += itemSubtotal;
+            
+            const itemGst = itemSubtotal * (gstRate / 100);
+            gstAmount += itemGst;
+
+            if (!gstBreakdown[gstRate]) {
+                gstBreakdown[gstRate] = { sgst: 0, cgst: 0 };
+            }
+            gstBreakdown[gstRate].sgst += itemGst / 2;
+            gstBreakdown[gstRate].cgst += itemGst / 2;
+        });
+        
+        const total = subtotal + gstAmount;
+        setPurchaseSummary({ baseAmount, discountAmount, subtotal, gstAmount, total, gstBreakdown });
+        setStep('summary');
     };
     
     const headerDisplayNames: Record<string, string> = {
@@ -131,91 +231,169 @@ const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onSa
         image: ( <> <p className="font-semibold">Image (PNG, JPG) File Format</p> <p>Upload a clear, well-lit image of a table or spreadsheet containing inventory data.</p> <p className="mt-2">Ensure columns for fields like Name, Batch, Expiry, Quantity, MRP, and Rate are visible.</p> </> ),
         pdf: ( <> <p className="font-semibold">PDF File Format</p> <p>Your PDF should contain a clearly structured table with inventory data.</p> <p className="mt-2">Ensure the text is selectable for best results.</p> </> ),
     };
+    
+    const UploadView = (
+        <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4 flex-grow min-h-0">
+                <div className="flex flex-col">
+                    <h3 className="text-lg font-semibold mb-2">Instructions</h3>
+                        <div className="mb-4 border-b border-border">
+                        <nav className="-mb-px flex space-x-4" aria-label="Tabs">
+                            {(['csv', 'image', 'pdf'] as InstructionTab[]).map(tab => (
+                                <button key={tab} onClick={() => setActiveTab(tab)} className={`${ activeTab === tab ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border' } whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm capitalize`}>
+                                    {tab}
+                                </button>
+                            ))}
+                        </nav>
+                    </div>
+                    <div className="p-4 bg-secondary rounded-lg text-secondary-foreground text-sm flex-grow"> {instructionContent[activeTab]} </div>
+                    <div className="mt-4">
+                        <label className="text-sm font-semibold text-muted-foreground mb-1 block">Purchase Status</label>
+                        <div className="flex gap-2 rounded-lg bg-input p-1.5 border border-border w-full">{ (['paid', 'credit'] as PurchaseStatus[]).map(s => (
+                            <button type="button" key={s} onClick={() => setPurchaseStatus(s)} className={`px-3 py-1.5 text-sm rounded-md flex-1 capitalize ${purchaseStatus === s ? 'bg-primary text-primary-foreground font-semibold shadow' : 'hover:bg-secondary/80'}`}>{s}</button>
+                        ))}</div>
+                    </div>
+                    <div className="mt-4">
+                        <label htmlFor="supplier-select" className="text-sm font-semibold text-muted-foreground mb-1 block">Supplier</label>
+                        <select
+                            id="supplier-select"
+                            value={selectedSupplierId}
+                            onChange={handleSupplierChange}
+                            required
+                            className="w-full p-3 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"
+                        >
+                            <option value="" disabled>Select a supplier</option>
+                            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            <option value="add_new" className="font-bold text-primary">-- Add New Supplier --</option>
+                        </select>
+                    </div>
+                    <label className="mt-4 w-full flex flex-col items-center px-4 py-6 bg-input text-primary rounded-lg shadow-sm tracking-wide uppercase border-2 border-dashed border-primary cursor-pointer hover:bg-secondary transition-colors">
+                        <UploadIcon className="w-8 h-8"/>
+                        <span className="mt-2 text-base leading-normal font-semibold text-center">{file ? file.name : 'Select a file'}</span>
+                        <input type='file' className="hidden" onChange={handleFileChange} accept=".csv, .png, .jpg, .jpeg, .pdf" />
+                    </label>
+                </div>
+
+                <div className="flex flex-col space-y-4 min-h-0">
+                    {imagePreviewUrl && ( <div className="flex-shrink-0"> <h3 className="text-lg font-semibold mb-2">Image Preview</h3> <div className="bg-secondary rounded-lg border border-border p-2 max-h-48 overflow-auto"> <img src={imagePreviewUrl} alt="Uploaded preview" className="w-full h-auto object-contain" /> </div> </div> )}
+                        <div className="flex flex-col flex-grow min-h-0">
+                            <h3 className="text-lg font-semibold mb-2">Parsed Data Preview</h3>
+                        <div className="flex-grow bg-secondary rounded-lg border border-border overflow-auto p-2">
+                            {isLoading && <div className="text-center p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div><p className="mt-2 text-sm text-muted-foreground">AI is parsing your file...</p></div>}
+                            {error && <div className="p-4 text-destructive font-medium bg-destructive/10 text-sm rounded-lg">{error}</div>}
+                            {parsedProducts.length > 0 && (
+                                <div className="overflow-x-auto">
+                                <table className="w-full text-xs text-left">
+                                    <thead className="text-muted-foreground sticky top-0 bg-secondary">
+                                        <tr>{preferredHeaderOrder.map(headerKey => ( <th key={headerKey} className="p-2 whitespace-nowrap font-semibold">{headerDisplayNames[headerKey] || headerKey}</th> ))}</tr>
+                                    </thead>
+                                    <tbody className="text-foreground">
+                                        {parsedProducts.map((p: any, i) => (
+                                            <tr key={i} className="border-t border-border">
+                                                {preferredHeaderOrder.map(headerKey => ( <td key={`${headerKey}-${i}`} className="p-2 whitespace-nowrap">{formatValue(p[headerKey], headerKey)}</td> ))}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                </div>
+                            )}
+                            {!isLoading && !error && parsedProducts.length === 0 && file && <p className="text-center text-sm text-muted-foreground p-4">No products found in the file.</p>}
+                            {!isLoading && !file && <p className="text-center text-sm text-muted-foreground p-4">Upload a file to see the preview.</p>}
+                        </div>
+                        </div>
+                </div>
+            </div>
+            <div className="flex justify-end space-x-3 pt-4 border-t border-border mt-auto flex-shrink-0">
+                <button type="button" onClick={handleClose} className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold">Cancel</button>
+                <button type="button" onClick={handleReviewPurchase} disabled={parsedProducts.length === 0 || isLoading || !selectedSupplierId} className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:cursor-not-allowed font-semibold shadow-md">
+                    Review Purchase
+                </button>
+            </div>
+        </>
+    );
+
+    const SummaryView = (
+        <>
+            <div className="flex-grow overflow-y-auto p-2 space-y-6">
+                 <div>
+                    <h3 className="text-xl font-bold mb-2">Products to be Added ({parsedProducts.length} items)</h3>
+                    <div className="max-h-[30vh] overflow-auto rounded-lg border border-border">
+                        <table className="w-full text-xs text-left">
+                            <thead className="text-muted-foreground sticky top-0 bg-secondary z-10">
+                                <tr>{preferredHeaderOrder.map(headerKey => ( <th key={headerKey} className="p-2 whitespace-nowrap font-semibold">{headerDisplayNames[headerKey] || headerKey}</th> ))}</tr>
+                            </thead>
+                            <tbody className="text-foreground">
+                                {parsedProducts.map((p: any, i) => (
+                                    <tr key={i} className="border-t border-border">
+                                        {preferredHeaderOrder.map(headerKey => ( <td key={`${headerKey}-${i}`} className="p-2 whitespace-nowrap">{formatValue(p[headerKey], headerKey)}</td> ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                 <div>
+                    <h3 className="text-xl font-bold mb-2">Purchase Summary</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-secondary/50 border border-border rounded-lg p-4 space-y-2">
+                             <div className="flex justify-between py-1 border-b border-border/50 text-sm"><span className="text-muted-foreground">Gross Amount</span><span className="font-semibold">₹{purchaseSummary.baseAmount.toFixed(2)}</span></div>
+                            <div className="flex justify-between py-1 border-b border-border/50 text-sm"><span className="text-muted-foreground">Total Discount</span><span className="font-semibold text-destructive">- ₹{purchaseSummary.discountAmount.toFixed(2)}</span></div>
+                            <div className="flex justify-between py-1 border-b border-border/50 text-sm"><span className="text-muted-foreground">Subtotal (Taxable)</span><span className="font-semibold">₹{purchaseSummary.subtotal.toFixed(2)}</span></div>
+                            {Object.entries(purchaseSummary.gstBreakdown).map(([rate, { sgst, cgst }]) => (
+                                <React.Fragment key={rate}>
+                                    <div className="flex justify-between py-1 border-b border-border/50 text-sm"><span className="text-muted-foreground">SGST @ {parseFloat(rate)/2}%</span><span className="font-semibold">+ ₹{sgst.toFixed(2)}</span></div>
+                                    <div className="flex justify-between py-1 border-b border-border/50 text-sm"><span className="text-muted-foreground">CGST @ {parseFloat(rate)/2}%</span><span className="font-semibold">+ ₹{cgst.toFixed(2)}</span></div>
+                                </React.Fragment>
+                            ))}
+                            <div className="flex justify-between text-lg font-bold mt-2 pt-2"><span className="text-foreground">Grand Total</span><span className="text-primary">₹{purchaseSummary.total.toFixed(2)}</span></div>
+                        </div>
+                        <div className="p-4 border border-border rounded-lg text-sm space-y-2 bg-secondary/50">
+                            <p><strong>Supplier:</strong> {suppliers.find(s => s.id === selectedSupplierId)?.name}</p>
+                            <p><strong>Status:</strong> <span className="capitalize font-semibold">{purchaseStatus}</span></p>
+                            <p><strong>Total Items:</strong> {parsedProducts.length} unique products</p>
+                            <p><strong>Source File:</strong> {file?.name}</p>
+                            <div className="pt-2 mt-2 border-t border-border">
+                                <h4 className="font-bold mb-1">Supplier Credit Summary</h4>
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">Previous Outstanding</span>
+                                    <span className="font-semibold">₹{supplierCredit.toFixed(2)}</span>
+                                </div>
+                                {purchaseStatus === 'credit' && (
+                                    <div className="flex justify-between">
+                                        <span className="text-muted-foreground">This Purchase (Credit)</span>
+                                        <span className="font-semibold">+ ₹{purchaseSummary.total.toFixed(2)}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between text-base font-bold mt-1 pt-1 border-t border-border">
+                                    <span className="text-foreground">New Total Outstanding</span>
+                                    <span className="text-destructive">₹{(supplierCredit + (purchaseStatus === 'credit' ? purchaseSummary.total : 0)).toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div className="flex justify-end space-x-3 pt-4 border-t border-border mt-auto flex-shrink-0">
+                <button type="button" onClick={() => setStep('upload')} className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold">Back</button>
+                <button type="button" onClick={() => { onSave(parsedProducts, purchaseStatus, selectedSupplierId, file); handleClose(); }} className="px-5 py-2.5 rounded-lg bg-success text-white hover:bg-success/90 font-semibold shadow-md">
+                    Confirm & Add to Inventory
+                </button>
+            </div>
+        </>
+    );
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
             <div className="bg-card text-card-foreground border border-border rounded-xl p-6 w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl">
-                <div className="flex justify-between items-center mb-4">
+                <div className="flex justify-between items-center mb-4 flex-shrink-0">
                     <h2 className="text-2xl font-bold">Bulk Upload Inventory</h2>
                     <button onClick={handleClose} className="text-muted-foreground hover:text-foreground"> <XIcon /> </button>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4 flex-grow min-h-0">
-                    <div className="flex flex-col">
-                        <h3 className="text-lg font-semibold mb-2">Instructions</h3>
-                         <div className="mb-4 border-b border-border">
-                            <nav className="-mb-px flex space-x-4" aria-label="Tabs">
-                                {(['csv', 'image', 'pdf'] as InstructionTab[]).map(tab => (
-                                    <button key={tab} onClick={() => setActiveTab(tab)} className={`${ activeTab === tab ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border' } whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm capitalize`}>
-                                        {tab}
-                                    </button>
-                                ))}
-                            </nav>
-                        </div>
-                        <div className="p-4 bg-secondary rounded-lg text-secondary-foreground text-sm flex-grow"> {instructionContent[activeTab]} </div>
-                        <div className="mt-4">
-                            <label className="text-sm font-semibold text-muted-foreground mb-1 block">Purchase Status</label>
-                            <div className="flex gap-2 rounded-lg bg-input p-1.5 border border-border w-full">{ (['paid', 'credit'] as PurchaseStatus[]).map(s => (
-                                <button type="button" key={s} onClick={() => setPurchaseStatus(s)} className={`px-3 py-1.5 text-sm rounded-md flex-1 capitalize ${purchaseStatus === s ? 'bg-primary text-primary-foreground font-semibold shadow' : 'hover:bg-secondary/80'}`}>{s}</button>
-                            ))}</div>
-                        </div>
-                        <div className="mt-4">
-                            <label htmlFor="supplier-select" className="text-sm font-semibold text-muted-foreground mb-1 block">Supplier</label>
-                            <select
-                                id="supplier-select"
-                                value={selectedSupplierId}
-                                onChange={handleSupplierChange}
-                                required
-                                className="w-full p-3 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"
-                            >
-                                <option value="" disabled>Select a supplier</option>
-                                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                <option value="add_new" className="font-bold text-primary">-- Add New Supplier --</option>
-                            </select>
-                        </div>
-                        <label className="mt-4 w-full flex flex-col items-center px-4 py-6 bg-input text-primary rounded-lg shadow-sm tracking-wide uppercase border-2 border-dashed border-primary cursor-pointer hover:bg-secondary transition-colors">
-                            <UploadIcon className="w-8 h-8"/>
-                            <span className="mt-2 text-base leading-normal font-semibold text-center">{file ? file.name : 'Select a file'}</span>
-                            <input type='file' className="hidden" onChange={handleFileChange} accept=".csv, .png, .jpg, .jpeg, .pdf" />
-                        </label>
-                    </div>
-
-                    <div className="flex flex-col space-y-4 min-h-0">
-                        {imagePreviewUrl && ( <div className="flex-shrink-0"> <h3 className="text-lg font-semibold mb-2">Image Preview</h3> <div className="bg-secondary rounded-lg border border-border p-2 max-h-48 overflow-auto"> <img src={imagePreviewUrl} alt="Uploaded preview" className="w-full h-auto object-contain" /> </div> </div> )}
-                         <div className="flex flex-col flex-grow min-h-0">
-                             <h3 className="text-lg font-semibold mb-2">Parsed Data Preview</h3>
-                            <div className="flex-grow bg-secondary rounded-lg border border-border overflow-auto p-2">
-                               {isLoading && <div className="text-center p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div><p className="mt-2 text-sm text-muted-foreground">AI is parsing your file...</p></div>}
-                               {error && <div className="p-4 text-destructive font-medium bg-destructive/10 text-sm rounded-lg">{error}</div>}
-                               {parsedProducts.length > 0 && (
-                                   <div className="overflow-x-auto">
-                                    <table className="w-full text-xs text-left">
-                                        <thead className="text-muted-foreground sticky top-0 bg-secondary">
-                                            <tr>{preferredHeaderOrder.map(headerKey => ( <th key={headerKey} className="p-2 whitespace-nowrap font-semibold">{headerDisplayNames[headerKey] || headerKey}</th> ))}</tr>
-                                        </thead>
-                                        <tbody className="text-foreground">
-                                            {parsedProducts.map((p: any, i) => (
-                                                <tr key={i} className="border-t border-border">
-                                                    {preferredHeaderOrder.map(headerKey => ( <td key={`${headerKey}-${i}`} className="p-2 whitespace-nowrap">{formatValue(p[headerKey], headerKey)}</td> ))}
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                   </div>
-                               )}
-                               {!isLoading && !error && parsedProducts.length === 0 && file && <p className="text-center text-sm text-muted-foreground p-4">No products found in the file.</p>}
-                                {!isLoading && !file && <p className="text-center text-sm text-muted-foreground p-4">Upload a file to see the preview.</p>}
-                            </div>
-                         </div>
-                    </div>
+                <div className="flex-grow flex flex-col min-h-0">
+                    {step === 'upload' ? UploadView : SummaryView}
                 </div>
-
-                <div className="flex justify-end space-x-3 pt-4 border-t border-border mt-auto flex-shrink-0">
-                    <button type="button" onClick={handleClose} className="px-5 py-2.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold">Cancel</button>
-                    <button type="button" onClick={handleConfirmUpload} disabled={parsedProducts.length === 0 || isLoading || !selectedSupplierId} className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:cursor-not-allowed font-semibold shadow-md">
-                        {isLoading ? 'Processing...' : `Add ${parsedProducts.length} Products`}
-                    </button>
-                </div>
+                
                 <SupplierModal 
                     isOpen={isSupplierModalOpen}
                     onClose={() => setIsSupplierModalOpen(false)}

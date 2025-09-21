@@ -68,6 +68,7 @@ export interface Transaction {
   discountPercentage?: number;
   status: 'paid' | 'credit';
   paymentMethod?: 'Cash' | 'Card' | 'UPI';
+  attachedPrescriptions?: { [productId: string]: string };
 }
 
 export interface PurchaseItem {
@@ -89,6 +90,7 @@ export interface Purchase {
   status: PurchaseStatus;
   paymentMethod?: 'cash' | 'bank' | 'upi';
   notes?: string;
+  sourceFileId?: string;
 }
 
 export interface ReturnItem {
@@ -184,7 +186,7 @@ export interface JournalEntry {
 }
 
 
-export type Page = 'dashboard' | 'analytics' | 'billing' | 'transaction-history' | 'inventory' | 'gemini' | 'suppliers' | 'expiring' | 'tax' | 'profile' | 'settings' | 'returns' | 'vouchers' | 'purchase-orders' | 'ledgers';
+export type Page = 'dashboard' | 'analytics' | 'billing' | 'transaction-history' | 'inventory' | 'gemini' | 'suppliers' | 'expiring' | 'tax' | 'profile' | 'settings' | 'returns' | 'vouchers' | 'purchase-orders' | 'ledgers' | 'audit-trail';
 
 export interface CartItem {
     productId: string;
@@ -234,7 +236,48 @@ export interface PurchaseOrder {
   totalValue: number;
 }
 
+export interface ParsedPrescriptionItem {
+    medicineName: string;
+    quantity: string;
+    dosage: string;
+}
+
+export interface ParsedPrescription {
+    patientName?: string;
+    doctorName?: string;
+    items: ParsedPrescriptionItem[];
+}
+
+export type UserRole = 'admin' | 'pharmacist' | 'cashier';
+
+export interface User {
+  id: string;
+  username: string;
+  role: UserRole;
+  email?: string;
+}
+
+export interface AuditLog {
+    id: string;
+    timestamp: string; // ISO string
+    userId: string;
+    username: string;
+    action: string; // e.g., 'SALE_COMPLETED', 'PRODUCT_DELETED'
+    details: Record<string, any>; // e.g., { transactionId: '...', total: 500 }
+}
+
+export interface StoreSettings {
+    storeName: string;
+    storeAddress: string;
+    contactNumber: string;
+    gstin: string;
+}
+
 export interface AppContextType {
+    currentUser: User | null;
+    login: (username: string, password: string) => Promise<User | null>;
+    logout: () => void;
+    updateCurrentUser: (updatedDetails: Partial<User>) => void;
     products: Product[];
     setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
     transactions: Transaction[];
@@ -247,6 +290,8 @@ export interface AppContextType {
     setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
     journal: JournalEntry[];
     addJournalEntry: (entry: Omit<JournalEntry, 'id'>) => void;
+    auditLogs: AuditLog[];
+    logAction: (action: string, details: Record<string, any>) => void;
     activePage: Page;
     setActivePage: (page: Page) => void;
     cart: CartItem[];
@@ -260,6 +305,8 @@ export interface AppContextType {
     setTransactionFilter: (filter: TransactionFilter) => void;
     gstSettings: GstSettings;
     setGstSettings: React.Dispatch<React.SetStateAction<GstSettings>>;
+    storeSettings: StoreSettings;
+    setStoreSettings: React.Dispatch<React.SetStateAction<StoreSettings>>;
     customerReturns: CustomerReturn[];
     setCustomerReturns: React.Dispatch<React.SetStateAction<CustomerReturn[]>>;
     supplierReturns: SupplierReturn[];

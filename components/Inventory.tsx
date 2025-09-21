@@ -1,9 +1,11 @@
 import React, { useState, useContext, useMemo, useEffect, useRef } from 'react';
 import { AppContext } from '../App';
 import { Product, Purchase, Batch, MedicineSchedule, PurchaseStatus, Supplier, InventoryFilterStatus, OrderListItem, PurchaseOrder, JournalTransaction } from '../types';
-import { PlusIcon, XIcon, UploadIcon, TotalItemsIcon, LowStockIcon, OutOfStockIcon, TotalValueIcon, ActionsIcon, ChevronDownIcon, ExportIcon, SearchIcon } from './Icons';
+import { PlusIcon, XIcon, UploadIcon, TotalItemsIcon, LowStockIcon, OutOfStockIcon, TotalValueIcon, ActionsIcon, ChevronDownIcon, ExportIcon, SearchIcon, SparklesIcon } from './Icons';
 import BulkUploadModal from './BulkUploadModal';
 import { SupplierModal } from './SupplierModal';
+import { getInventoryAnalysis } from '../services/geminiService';
+import { saveFile } from '../services/db';
 
 type PaymentMethod = 'cash' | 'bank' | 'upi';
 type NewProductType = 'strip' | 'bottle' | 'tube' | 'other';
@@ -37,7 +39,7 @@ const AddStockModal: React.FC<{
     products: Product[];
 }> = ({ isOpen, onClose, onSave, products }) => {
     
-    const { suppliers, setSuppliers, purchases, gstSettings } = useContext(AppContext);
+    const { suppliers, setSuppliers, purchases, gstSettings, journal } = useContext(AppContext);
     const [product, setProduct] = useState<Partial<Product>>({ name: '', hsnCode: '', pack: '', manufacturer: '', salts: '', schedule: 'none', category: '', minStock: 20 });
     const [batch, setBatch] = useState<Omit<Batch, 'id'>>({ batchNumber: '', expiryDate: '', stock: 0, mrp: 0, price: 0, discount: 0 });
     const [purchaseStatus, setPurchaseStatus] = useState<PurchaseStatus>('paid');
@@ -45,6 +47,8 @@ const AddStockModal: React.FC<{
     const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
     const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
     const [purchaseHistory, setPurchaseHistory] = useState<any[]>([]);
+    const [priceChangeWarning, setPriceChangeWarning] = useState<Array<{ message: string; type: 'increase' | 'decrease' | 'neutral' }> | null>(null);
+    const [supplierCredit, setSupplierCredit] = useState(0);
     
     const [invoiceNumber, setInvoiceNumber] = useState('');
     const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
@@ -64,11 +68,13 @@ const AddStockModal: React.FC<{
             setExistingProduct(null);
             setSelectedSupplierId('');
             setPurchaseHistory([]);
+            setPriceChangeWarning(null);
             setInvoiceNumber('');
             setPaymentMethod('cash');
             setNotes('');
             setNewProductType('strip');
             setStripInfo({ units: 10, type: 'tabs' });
+            setSupplierCredit(0);
         }
     }, [isOpen]);
 
@@ -99,6 +105,84 @@ const AddStockModal: React.FC<{
             setProduct(p => ({ ...p, pack: generatedPack }));
         }
     }, [newProductType, stripInfo, liquidInfo, otherPack, existingProduct]);
+    
+    useEffect(() => {
+        if (selectedSupplierId) {
+            let balance = 0;
+            journal.forEach(entry => {
+                entry.transactions.forEach(t => {
+                    if (t.accountId === selectedSupplierId) {
+                        if (t.type === 'credit') {
+                            balance += t.amount;
+                        } else if (t.type === 'debit') {
+                            balance -= t.amount;
+                        }
+                    }
+                });
+            });
+            setSupplierCredit(balance);
+        } else {
+            setSupplierCredit(0);
+        }
+    }, [selectedSupplierId, journal]);
+
+
+    // Effect to check for price changes against history
+    useEffect(() => {
+        if (!existingProduct || purchaseHistory.length === 0) {
+            setPriceChangeWarning(null);
+            return;
+        }
+
+        const lastPurchase = purchaseHistory[purchaseHistory.length - 1];
+        const warnings: Array<{ message: string; type: 'increase' | 'decrease' | 'neutral' }> = [];
+
+        // Compare MRP
+        if (lastPurchase.mrp > 0 && batch.mrp > 0 && Math.abs(lastPurchase.mrp - batch.mrp) > 0.01) {
+            warnings.push({
+                message: `MRP changed from ₹${lastPurchase.mrp.toFixed(2)} to ₹${batch.mrp.toFixed(2)}.`,
+                type: batch.mrp > lastPurchase.mrp ? 'increase' : 'decrease'
+            });
+        }
+
+        // Compare Purchase Price
+        if (lastPurchase.price > 0 && batch.price > 0 && Math.abs(lastPurchase.price - batch.price) > 0.01) {
+            warnings.push({
+                message: `Purchase price changed from ₹${lastPurchase.price.toFixed(2)} to ₹${batch.price.toFixed(2)}.`,
+                type: batch.price > lastPurchase.price ? 'increase' : 'decrease'
+            });
+        }
+
+        // Compare Discount
+        if (lastPurchase.discount !== batch.discount) {
+            warnings.push({
+                message: `Discount changed from ${lastPurchase.discount}% to ${batch.discount}%.`,
+                type: batch.discount > lastPurchase.discount ? 'decrease' : 'increase'
+            });
+        }
+        
+        // Compare GST
+        const lastGstRate = lastPurchase.gst;
+        const newGstRate = product.hsnCode?.startsWith('3004')
+            ? (gstSettings.general || 12)
+            : product.hsnCode?.startsWith('2106')
+            ? (gstSettings.food || 18)
+            : (gstSettings.subsidized || 5);
+
+        if (lastGstRate !== newGstRate) {
+             warnings.push({
+                message: `GST rate changed from ${lastGstRate}% to ${newGstRate}%.`,
+                type: 'neutral'
+             });
+        }
+
+        if (warnings.length > 0) {
+            setPriceChangeWarning(warnings);
+        } else {
+            setPriceChangeWarning(null);
+        }
+
+    }, [batch, existingProduct, purchaseHistory, product.hsnCode, gstSettings]);
 
     const summary: PurchaseSummary = useMemo(() => {
         const { stock, price, discount } = batch;
@@ -266,6 +350,31 @@ const AddStockModal: React.FC<{
                                 <div> <label className={labelClass}>Medicine Schedule</label> <div className="flex flex-wrap gap-2 rounded-lg bg-input p-1.5 border border-border">{ (['none', 'H', 'H1', 'narcotic', 'tb'] as MedicineSchedule[]).map(s => ( <button type="button" key={s} onClick={() => !existingProduct && setProduct(p => ({ ...p, schedule: s }))} disabled={!!existingProduct} className={`px-3 py-1.5 text-sm rounded-md flex-1 capitalize ${product.schedule === s ? 'bg-primary text-primary-foreground font-semibold shadow' : 'hover:bg-secondary/80'}`}>{s}</button> ))}</div> </div>
                             </div>
                             <h4 className="font-semibold mt-6 mb-3 text-md border-t border-border pt-4">New Batch Details</h4>
+                            {priceChangeWarning && (
+                                <div className="p-3 mb-4 bg-secondary/50 border border-border rounded-lg space-y-2">
+                                    <p className="font-bold text-sm text-muted-foreground">Price Change Alert:</p>
+                                    <div className="space-y-1.5">
+                                        {priceChangeWarning.map((warning, index) => {
+                                            const colors = {
+                                                increase: 'bg-red-100 text-red-800 border-red-200',
+                                                decrease: 'bg-green-100 text-green-800 border-green-200',
+                                                neutral: 'bg-amber-100 text-amber-800 border-amber-200',
+                                            };
+                                            const arrow = {
+                                                increase: '↑',
+                                                decrease: '↓',
+                                                neutral: '•',
+                                            }
+                                            return (
+                                                <div key={index} className={`flex items-start gap-2 p-2 text-sm rounded-md border ${colors[warning.type]}`}>
+                                                    <span className="font-bold">{arrow[warning.type]}</span>
+                                                    <span>{warning.message}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div><label className={labelClass}>Batch Number</label><input type="text" name="batchNumber" value={batch.batchNumber} onChange={handleBatchChange} required className={inputClass} /></div>
                                 <div><label className={labelClass}>Expiry Date</label><input type="date" name="expiryDate" value={batch.expiryDate} onChange={handleBatchChange} required className={inputClass} /></div>
@@ -302,6 +411,28 @@ const AddStockModal: React.FC<{
                                 <div className="flex justify-between py-1"><span className="text-muted-foreground">CGST @ {summary.gstRate/2}%</span><span className="font-semibold">+ ₹{summary.cgst.toFixed(2)}</span></div>
                             </div>
                             <div className="flex justify-between text-base font-bold mt-3 pt-3 border-t border-border"><span className="text-foreground">Grand Total</span><span className="text-primary">₹{summary.total.toFixed(2)}</span></div>
+
+                            {selectedSupplierId && (
+                                <div className="mt-4 pt-3 border-t border-border/50 text-sm">
+                                    <h4 className="font-bold text-md mb-2">Supplier Credit Summary</h4>
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between">
+                                            <span className="text-muted-foreground">Previous Outstanding Balance</span>
+                                            <span className="font-semibold">₹{supplierCredit.toFixed(2)}</span>
+                                        </div>
+                                        {purchaseStatus === 'credit' && (
+                                            <div className="flex justify-between">
+                                                <span className="text-muted-foreground">This Purchase (Credit)</span>
+                                                <span className="font-semibold">+ ₹{summary.total.toFixed(2)}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="flex justify-between text-base font-bold mt-2 pt-2 border-t border-border">
+                                        <span className="text-foreground">New Total Outstanding</span>
+                                        <span className="text-destructive">₹{(supplierCredit + (purchaseStatus === 'credit' ? summary.total : 0)).toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex justify-end space-x-3 pt-4 flex-shrink-0">
@@ -596,7 +727,7 @@ const PurchaseOrderList: React.FC = () => {
 }
 
 const Inventory: React.FC = () => {
-    const { products, setProducts, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings, orderList, setOrderList, addJournalEntry } = useContext(AppContext);
+    const { products, setProducts, transactions, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings, orderList, setOrderList, addJournalEntry, currentUser, logAction } = useContext(AppContext);
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
@@ -610,6 +741,23 @@ const Inventory: React.FC = () => {
     const actionsMenuRef = useRef<HTMLDivElement>(null);
     const [productToEdit, setProductToEdit] = useState<Product | null>(null);
     const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+    
+    const [aiSummary, setAiSummary] = useState('');
+    const [isAiSummaryLoading, setIsAiSummaryLoading] = useState(false);
+
+    const handleGenerateAiSummary = async () => {
+        setIsAiSummaryLoading(true);
+        setAiSummary('');
+        try {
+            const summary = await getInventoryAnalysis(products, transactions);
+            setAiSummary(summary);
+        } catch (error) {
+            setAiSummary('An error occurred while generating the AI summary.');
+            console.error(error);
+        } finally {
+            setIsAiSummaryLoading(false);
+        }
+    };
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -767,6 +915,13 @@ const Inventory: React.FC = () => {
                 return [...prev, updatedProduct];
             }
         });
+        
+        logAction('STOCK_ADDED', {
+            productName: productData.name,
+            batchNumber: newBatch.batchNumber,
+            quantity: newBatch.stock,
+            isNewProduct: !productData.id,
+        });
 
         const newPurchaseId = `purch_${Date.now()}`;
         const newPurchase: Purchase = {
@@ -814,7 +969,7 @@ const Inventory: React.FC = () => {
         });
     };
     
-     const handleBulkSave = (newProducts: any[], purchaseStatus: PurchaseStatus, supplierId: string) => {
+     const handleBulkSave = async (newProducts: any[], purchaseStatus: PurchaseStatus, supplierId: string, sourceFile: File | null) => {
         const timestamp = Date.now();
         let totalSubtotal = 0;
         let totalSgst = 0;
@@ -835,13 +990,26 @@ const Inventory: React.FC = () => {
                     discount: newProd.discount,
                 };
                 
-                const baseAmount = newBatch.stock * newBatch.price;
-                const discountAmount = baseAmount * (newBatch.discount / 100);
-                const subtotal = baseAmount - discountAmount;
-                const gstRate = getGstRate(newProd.hsnCode);
-                const gstAmount = subtotal * (gstRate / 100);
+                let itemSubtotal: number;
+                const stock = newProd.stock || 0;
+                const price = newProd.price || 0; // 'Rate'
+                const parsedDiscountPercent = newProd.discount;
+                const parsedAmount = newProd.amount; // Final line total, post-tax
 
-                totalSubtotal += subtotal;
+                const gstRate = getGstRate(newProd.hsnCode);
+
+                // Prioritize parsed 'amount' for accuracy, aligning with the review screen logic.
+                if (typeof parsedAmount === 'number' && parsedAmount > 0) {
+                    itemSubtotal = parsedAmount / (1 + gstRate / 100);
+                } else {
+                    const itemBase = stock * price;
+                    const itemDiscount = itemBase * (parsedDiscountPercent / 100);
+                    itemSubtotal = itemBase - itemDiscount;
+                }
+
+                const gstAmount = itemSubtotal * (gstRate / 100);
+
+                totalSubtotal += itemSubtotal;
                 totalSgst += gstAmount / 2;
                 totalCgst += gstAmount / 2;
 
@@ -873,9 +1041,9 @@ const Inventory: React.FC = () => {
                     productId: productId,
                     productName: newProd.name,
                     batchId: newBatch.id,
-                    quantity: newBatch.stock,
-                    price: newBatch.price,
-                    amount: subtotal,
+                    quantity: newProd.stock,
+                    price: newProd.price,
+                    amount: itemSubtotal,
                 });
             });
 
@@ -894,6 +1062,12 @@ const Inventory: React.FC = () => {
                 total: grandTotal,
                 date: new Date().toISOString(),
             };
+
+            if (sourceFile) {
+                await saveFile(newPurchase.id, sourceFile);
+                newPurchase.sourceFileId = newPurchase.id;
+            }
+
             setPurchases(prev => [...prev, newPurchase]);
             
             // --- Add Journal Entry for Bulk Upload ---
@@ -1059,6 +1233,10 @@ const Inventory: React.FC = () => {
     };
 
     const handleDeleteProduct = (productId: string) => {
+        const productToDelete = products.find(p => p.id === productId);
+        if (productToDelete) {
+             logAction('PRODUCT_DELETED', { productId: productToDelete.id, productName: productToDelete.name });
+        }
         setProducts(prev => prev.filter(p => p.id !== productId));
         setProductToDelete(null);
     };
@@ -1082,14 +1260,33 @@ const Inventory: React.FC = () => {
                     </div>
                 
             </div>
-            {lowStockCount > 0 && (
-                <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mb-6 rounded-r-lg">
-                    <div className="flex">
-                        <div className="flex-shrink-0"><LowStockIcon className="h-5 w-5 text-amber-400"/></div>
-                        <div className="ml-3"><p className="text-sm text-amber-700 font-bold">Low Stock Alert: <span className="font-medium">{lowStockCount} medicines are running low on stock and need restocking.</span></p></div>
+            
+            <div className="bg-card border border-border rounded-xl p-5 mb-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-start">
+                    <div className="flex-grow">
+                        <h2 className="text-xl font-bold text-foreground flex items-center gap-2">
+                            <SparklesIcon className="text-primary w-6 h-6" />
+                            AI Inventory Analysis
+                        </h2>
+                        <p className="text-muted-foreground text-sm mt-1">Get strategic insights on your inventory with one click.</p>
                     </div>
+                     <button
+                        onClick={handleGenerateAiSummary}
+                        disabled={isAiSummaryLoading}
+                        className="flex items-center px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 font-semibold shadow-sm text-sm disabled:bg-muted disabled:cursor-not-allowed"
+                    >
+                        {isAiSummaryLoading ? 'Analyzing...' : 'Generate AI Summary'}
+                    </button>
                 </div>
-            )}
+                 {isAiSummaryLoading && (
+                     <div className="text-center p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div><p className="mt-2 text-sm text-muted-foreground">AI is analyzing inventory and sales data...</p></div>
+                )}
+                {aiSummary && !isAiSummaryLoading && (
+                    <div className="mt-4 p-4 bg-secondary/50 rounded-lg border border-border">
+                        <pre className="whitespace-pre-wrap font-sans text-sm text-foreground">{aiSummary}</pre>
+                    </div>
+                )}
+            </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                 <StatCard title="Total Items" value={products.length.toString()} subtitle="Unique medicines in stock" icon={<TotalItemsIcon className="w-8 h-8 text-indigo-500" />} iconBgColor="bg-indigo-100" />
@@ -1179,8 +1376,12 @@ const Inventory: React.FC = () => {
                                                     <ul className="py-1">
                                                         <li><button onClick={(e) => { e.stopPropagation(); handleAddToOrder(product); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Add to Order List</button></li>
                                                         <li><button onClick={(e) => { e.stopPropagation(); handleMarkOrderLater(product.id); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Mark to Order Later</button></li>
-                                                        <li><button onClick={(e) => { e.stopPropagation(); setProductToEdit(product); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Edit</button></li>
-                                                        <li><button onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm text-destructive hover:bg-secondary">Delete</button></li>
+                                                        {currentUser?.role === 'admin' && (
+                                                          <>
+                                                            <li><button onClick={(e) => { e.stopPropagation(); setProductToEdit(product); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Edit</button></li>
+                                                            <li><button onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm text-destructive hover:bg-secondary">Delete</button></li>
+                                                          </>
+                                                        )}
                                                     </ul>
                                                 </div>
                                             )}

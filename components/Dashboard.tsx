@@ -68,7 +68,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 const Dashboard: React.FC = () => {
-    const { products, transactions, purchases, setActivePage, setInventoryFilter, setTransactionFilter } = useContext(AppContext);
+    const { products, transactions, purchases, setActivePage, setInventoryFilter, setTransactionFilter, currentUser, logout } = useContext(AppContext);
     const [chartRange, setChartRange] = useState<'day' | 'week' | 'month'>('month');
     const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
     const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -107,7 +107,7 @@ const Dashboard: React.FC = () => {
             totalStock: p.batches.reduce((sum, b) => sum + b.stock, 0)
         }));
 
-        const lowStockItems = productsWithTotalStock.filter(p => p.totalStock > 0 && p.totalStock < 20);
+        const lowStockItems = productsWithTotalStock.filter(p => p.totalStock > 0 && p.totalStock < (p.minStock || 20));
         
         const thirtyDaysFromNow = new Date();
         thirtyDaysFromNow.setDate(now.getDate() + 30);
@@ -227,7 +227,7 @@ const Dashboard: React.FC = () => {
             <header className="flex flex-wrap justify-between items-center gap-4">
                 <div className="flex-1">
                     <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
-                    <p className="text-muted-foreground">Welcome to MediStore Pro</p>
+                    <p className="text-muted-foreground">Welcome back, {currentUser?.username || 'User'}</p>
                 </div>
                 <div className="flex-1 min-w-[300px]"> <GlobalSearch /> </div>
                 <div className="flex items-center space-x-2">
@@ -256,12 +256,12 @@ const Dashboard: React.FC = () => {
                         {isUserMenuOpen && (
                             <div className="absolute top-full right-0 mt-2 w-48 bg-popover border border-border rounded-lg shadow-xl z-50 py-1">
                                 <div className="px-3 py-2 border-b border-border">
-                                    <p className="font-semibold text-sm">Pharmacist</p>
-                                    <p className="text-xs text-muted-foreground">admin@medistore.pro</p>
+                                    <p className="font-semibold text-sm capitalize">{currentUser?.username}</p>
+                                    <p className="text-xs text-muted-foreground capitalize">{currentUser?.role}</p>
                                 </div>
-                                <button className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center gap-2"><ProfileIcon className="w-4 h-4" /> My Profile</button>
-                                <button className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center gap-2"><SettingsIcon className="w-4 h-4" /> Settings</button>
-                                <button className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center gap-2 text-red-500"><LogoutIcon className="w-4 h-4" /> Logout</button>
+                                <button onClick={() => setActivePage('profile')} className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center gap-2"><ProfileIcon className="w-4 h-4" /> My Profile</button>
+                                <button onClick={() => setActivePage('settings')} disabled={currentUser?.role !== 'admin'} className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center gap-2 disabled:opacity-50"><SettingsIcon className="w-4 h-4" /> Settings</button>
+                                <button onClick={logout} className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center gap-2 text-red-500"><LogoutIcon className="w-4 h-4" /> Logout</button>
                             </div>
                         )}
                     </div>
