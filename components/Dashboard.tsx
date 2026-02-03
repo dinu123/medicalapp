@@ -2,8 +2,9 @@ import React, { useContext, useMemo, useState, useRef, useEffect } from 'react';
 import { AppContext } from '../App';
 import { MonthlySalesIcon, MonthlyPurchasesIcon, LowStockIcon, ExpiringSoonIcon, BellIcon, UserIcon, ProfileIcon, SettingsIcon, LogoutIcon } from './Icons';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Product } from '../types';
 import GlobalSearch from './GlobalSearch';
+import { getDashboardStats, getDashboardAlerts } from '../services/dashboardService';
+import { getChartData, getTransactions } from '../services/transactionService';
 
 const DashboardCard: React.FC<{ title: string; value: string; subtitle: string; icon: React.ReactNode; onClick: () => void; }> = ({ title, value, subtitle, icon, onClick }) => (
     <button onClick={onClick} className="bg-card border border-border p-5 rounded-lg flex items-center space-x-4 text-left w-full hover:shadow-lg hover:-translate-y-1 transition-transform duration-200 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background">
@@ -68,12 +69,79 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 const Dashboard: React.FC = () => {
-    const { products, transactions, purchases, setActivePage, setInventoryFilter, setTransactionFilter, currentUser, logout } = useContext(AppContext);
+    const { setActivePage, setInventoryFilter, setTransactionFilter, currentUser, logout } = useContext(AppContext);
     const [chartRange, setChartRange] = useState<'day' | 'week' | 'month'>('month');
     const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
     const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+    const [dashboardStats, setDashboardStats] = useState({
+        monthlySales: 0,
+        monthlyPurchases: 0,
+        lowStockCount: 0,
+        expiringSoonCount: 0
+    });
+    const [chartData, setChartData] = useState<any[]>([]);
+    const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
+    const [alertData, setAlertData] = useState<{lowStockItems: any[], expiringItems: any[]}>({lowStockItems: [], expiringItems: []});
     const notificationsRef = useRef<HTMLDivElement>(null);
     const userMenuRef = useRef<HTMLDivElement>(null);
+
+    // Fetch dashboard stats and chart data from backend
+    useEffect(() => {
+        const fetchDashboardData = async () => {
+            try {
+                const [stats, transactions, alerts] = await Promise.all([
+                    getDashboardStats(),
+                    getTransactions(),
+                    getDashboardAlerts()
+                ]);
+                setDashboardStats(stats);
+                setRecentTransactions(transactions?.slice(0, 5) || []);
+                setAlertData(alerts);
+            } catch (error) {
+                console.error('Failed to fetch dashboard data:', error);
+            }
+        };
+        
+        fetchDashboardData();
+    }, []);
+
+    // Fetch chart data when range changes
+    useEffect(() => {
+        const fetchChartData = async () => {
+            try {
+                const data = await getChartData(chartRange);
+                const formattedData = data.map((item: any) => {
+                    const date = new Date(item.date);
+                    let name;
+                    
+                    switch (chartRange) {
+                        case 'day':
+                            name = date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+                            break;
+                        case 'week':
+                            name = date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+                            break;
+                        case 'month':
+                        default:
+                            name = date.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+                            break;
+                    }
+                    
+                    return {
+                        name,
+                        sales: parseFloat((item.sales || 0).toFixed(2)),
+                        purchases: parseFloat((item.purchases || 0).toFixed(2)),
+                        profit: parseFloat(((item.sales || 0) - (item.purchases || 0)).toFixed(2))
+                    };
+                });
+                setChartData(formattedData);
+            } catch (error) {
+                console.error('Failed to fetch chart data:', error);
+            }
+        };
+        
+        fetchChartData();
+    }, [chartRange]);
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -89,138 +157,27 @@ const Dashboard: React.FC = () => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const dashboardData = useMemo(() => {
-        const now = new Date();
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
-
-        const monthlySales = transactions
-            .filter(t => { const date = new Date(t.date); return date.getMonth() === currentMonth && date.getFullYear() === currentYear; })
-            .reduce((sum, t) => sum + t.total, 0);
-
-        const monthlyPurchases = purchases
-            .filter(p => { const date = new Date(p.date); return date.getMonth() === currentMonth && date.getFullYear() === currentYear; })
-            .reduce((sum, p) => sum + p.total, 0);
-
-        const productsWithTotalStock = products.map(p => ({
-            ...p,
-            totalStock: p.batches.reduce((sum, b) => sum + b.stock, 0)
-        }));
-
-        const lowStockItems = productsWithTotalStock.filter(p => p.totalStock > 0 && p.totalStock < (p.minStock || 20));
-        
-        const thirtyDaysFromNow = new Date();
-        thirtyDaysFromNow.setDate(now.getDate() + 30);
-        const expiringSoonItems = products.flatMap(p => 
-            p.batches
-              .filter(b => {
-                  const expiryDate = new Date(b.expiryDate);
-                  return expiryDate > now && expiryDate <= thirtyDaysFromNow;
-              })
-              .map(b => ({ ...p, batch: b }))
-        );
-
-        return { monthlySales, monthlyPurchases, lowStockItems, expiringSoonItems };
-    }, [products, transactions, purchases]);
-    
-    const { chartData, dateRangeLabel } = useMemo(() => {
-        const data = new Map<string, { sales: number; purchases: number; date: Date }>();
+    const dateRangeLabel = useMemo(() => {
         const endDate = new Date();
         let startDate: Date;
-        let dateKeyFormatter: (date: Date) => string;
-        let dateGrouper: (date: Date) => string;
-
+        
         switch (chartRange) {
             case 'day':
                 startDate = new Date();
                 startDate.setDate(endDate.getDate() - 29);
-                startDate.setHours(0, 0, 0, 0);
-                dateKeyFormatter = (d) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-                dateGrouper = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().split('T')[0];
-
-                for (let i = 29; i >= 0; i--) {
-                    const d = new Date();
-                    d.setDate(d.getDate() - i);
-                    d.setHours(0, 0, 0, 0);
-                    const key = dateGrouper(d);
-                    data.set(key, { sales: 0, purchases: 0, date: d });
-                }
                 break;
-            
             case 'week':
-                const getStartOfWeek = (d: Date) => {
-                    const date = new Date(d);
-                    const day = date.getDay(); // Sunday - 0
-                    const diff = date.getDate() - day;
-                    date.setDate(diff);
-                    date.setHours(0, 0, 0, 0);
-                    return date;
-                };
                 startDate = new Date();
-                startDate.setDate(endDate.getDate() - (12 * 7 - 1));
-                startDate.setHours(0, 0, 0, 0);
-                dateKeyFormatter = (d) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-                dateGrouper = (d) => getStartOfWeek(d).toISOString().split('T')[0];
-                
-                for (let i = 11; i >= 0; i--) {
-                    const d = new Date();
-                    d.setDate(d.getDate() - i * 7);
-                    const weekStart = getStartOfWeek(d);
-                    const key = dateGrouper(weekStart);
-                    data.set(key, { sales: 0, purchases: 0, date: weekStart });
-                }
+                startDate.setDate(endDate.getDate() - 84);
                 break;
-
             case 'month':
             default:
                 startDate = new Date(endDate.getFullYear(), endDate.getMonth() - 11, 1);
-                startDate.setHours(0, 0, 0, 0);
-                dateKeyFormatter = (d) => d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
-                dateGrouper = (d) => new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
-
-                for (let i = 11; i >= 0; i--) {
-                    const d = new Date(endDate.getFullYear(), endDate.getMonth() - i, 1);
-                    const key = dateGrouper(d);
-                    data.set(key, { sales: 0, purchases: 0, date: d });
-                }
                 break;
         }
-
-        transactions.forEach(t => {
-            const date = new Date(t.date);
-            if (date >= startDate && date <= endDate) {
-                const key = dateGrouper(date);
-                const entry = data.get(key);
-                if (entry) {
-                    entry.sales += t.total;
-                }
-            }
-        });
-
-        purchases.forEach(p => {
-            const date = new Date(p.date);
-            if (date >= startDate && date <= endDate) {
-                const key = dateGrouper(date);
-                const entry = data.get(key);
-                if (entry) {
-                    entry.purchases += p.total;
-                }
-            }
-        });
         
-        const chartData = Array.from(data.values()).map(value => ({
-            name: dateKeyFormatter(value.date),
-            sales: parseFloat(value.sales.toFixed(2)),
-            purchases: parseFloat(value.purchases.toFixed(2)),
-            profit: parseFloat((value.sales - value.purchases).toFixed(2)),
-        }));
-        
-        const dateRangeLabel = `${startDate.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})} - ${endDate.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})}`;
-
-        return { chartData, dateRangeLabel };
-    }, [transactions, purchases, chartRange]);
-    
-    const recentTransactions = [...transactions].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5);
+        return `${startDate.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})} - ${endDate.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})}`;
+    }, [chartRange]);
 
     return (
         <div className="p-6 space-y-6 bg-secondary">
@@ -235,16 +192,16 @@ const Dashboard: React.FC = () => {
                     <div ref={notificationsRef} className="relative">
                         <button onClick={() => setIsNotificationsOpen(o => !o)} className="p-2 rounded-full hover:bg-card relative">
                             <BellIcon className="w-6 h-6 text-muted-foreground" />
-                            {(dashboardData.lowStockItems.length > 0 || dashboardData.expiringSoonItems.length > 0) &&
+                            {(dashboardStats.lowStockCount > 0 || dashboardStats.expiringSoonCount > 0) &&
                                 <span className="absolute top-1.5 right-1.5 block w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-secondary"></span>}
                         </button>
                         {isNotificationsOpen && (
                             <div className="absolute top-full right-0 mt-2 w-80 bg-popover border border-border rounded-lg shadow-xl z-50 p-2">
                                <div className="p-2 font-semibold text-sm">Notifications</div>
                                <div className="max-h-60 overflow-y-auto">
-                                   {dashboardData.lowStockItems.length > 0 && <div className="p-2 text-xs border-b border-border"> <p className="font-bold text-yellow-600">Low Stock Alert</p> <p>{dashboardData.lowStockItems.length} items need restocking.</p></div>}
-                                   {dashboardData.expiringSoonItems.length > 0 && <div className="p-2 text-xs"> <p className="font-bold text-red-600">Expiring Soon Alert</p> <p>{dashboardData.expiringSoonItems.length} items expiring in 30 days.</p></div>}
-                                   {dashboardData.lowStockItems.length === 0 && dashboardData.expiringSoonItems.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No new notifications.</p>}
+                                   {dashboardStats.lowStockCount > 0 && <div className="p-2 text-xs border-b border-border"> <p className="font-bold text-yellow-600">Low Stock Alert</p> <p>{dashboardStats.lowStockCount} items need restocking.</p></div>}
+                                   {dashboardStats.expiringSoonCount > 0 && <div className="p-2 text-xs"> <p className="font-bold text-red-600">Expiring Soon Alert</p> <p>{dashboardStats.expiringSoonCount} items expiring in 30 days.</p></div>}
+                                   {dashboardStats.lowStockCount === 0 && dashboardStats.expiringSoonCount === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No new notifications.</p>}
                                </div>
                             </div>
                         )}
@@ -269,10 +226,10 @@ const Dashboard: React.FC = () => {
             </header>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <DashboardCard title="Monthly Sales" value={`₹${dashboardData.monthlySales.toLocaleString('en-IN')}`} subtitle="Revenue this month" icon={<MonthlySalesIcon className="w-8 h-8 text-green-500" />} onClick={() => { setTransactionFilter({ type: 'sales', period: 'last_month' }); setActivePage('transaction-history'); }} />
-                <DashboardCard title="Monthly Purchases" value={`₹${dashboardData.monthlyPurchases.toLocaleString('en-IN')}`} subtitle="Inventory investment" icon={<MonthlyPurchasesIcon className="w-8 h-8 text-blue-500" />} onClick={() => { setTransactionFilter({ type: 'purchases', period: 'last_month' }); setActivePage('transaction-history'); }} />
-                <DashboardCard title={`${dashboardData.lowStockItems.length}`} value="Low Stock Items" subtitle="Need restocking" icon={<LowStockIcon className="w-8 h-8 text-yellow-500" />} onClick={() => { setInventoryFilter({ status: 'low_stock' }); setActivePage('inventory'); }} />
-                <DashboardCard title={`${dashboardData.expiringSoonItems.length}`} value="Expiring Soon" subtitle="Within 30 days" icon={<ExpiringSoonIcon className="w-8 h-8 text-red-500" />} onClick={() => setActivePage('expiring')} />
+                <DashboardCard title="Monthly Sales" value={`₹${dashboardStats.monthlySales.toLocaleString('en-IN')}`} subtitle="Revenue this month" icon={<MonthlySalesIcon className="w-8 h-8 text-green-500" />} onClick={() => { setTransactionFilter({ type: 'sales', period: 'last_month' }); setActivePage('transaction-history'); }} />
+                <DashboardCard title="Monthly Purchases" value={`₹${dashboardStats.monthlyPurchases.toLocaleString('en-IN')}`} subtitle="Inventory investment" icon={<MonthlyPurchasesIcon className="w-8 h-8 text-blue-500" />} onClick={() => { setTransactionFilter({ type: 'purchases', period: 'last_month' }); setActivePage('transaction-history'); }} />
+                <DashboardCard title={`${dashboardStats.lowStockCount}`} value="Low Stock Items" subtitle="Need restocking" icon={<LowStockIcon className="w-8 h-8 text-yellow-500" />} onClick={() => { setInventoryFilter({ status: 'low_stock' }); setActivePage('inventory'); }} />
+                <DashboardCard title={`${dashboardStats.expiringSoonCount}`} value="Expiring Soon" subtitle="Within 30 days" icon={<ExpiringSoonIcon className="w-8 h-8 text-red-500" />} onClick={() => setActivePage('expiring')} />
             </div>
 
             <div className="bg-card border border-border p-4 rounded-lg">
@@ -313,19 +270,19 @@ const Dashboard: React.FC = () => {
                         <button onClick={() => setActivePage('transaction-history')} className="text-sm font-semibold text-primary hover:underline">View All</button>
                     </div>
                     <div className="border-t border-border">
-                        {recentTransactions.map((t, index) => (
-                           <div key={t.id} className="flex justify-between items-center p-3 border-b border-border hover:bg-secondary">
+                        {recentTransactions?.map((t, index) => (
+                           <div key={t._id || t.id || index} className="flex justify-between items-center p-3 border-b border-border hover:bg-secondary">
                                 <div className="flex items-center gap-3">
                                     <div className={`w-10 h-10 rounded-md flex items-center justify-center ${index % 2 === 0 ? 'bg-blue-100' : 'bg-indigo-100'}`}>
                                        <span className="font-bold text-sm text-blue-800">SELL</span>
                                     </div>
                                     <div>
-                                        <p className="font-semibold text-foreground text-sm">INV{t.id.slice(-5)}</p>
-                                        <p className="text-xs text-muted-foreground">{t.items.length} item(s) • {new Date(t.date).toLocaleDateString('en-GB').replace(/\//g, '-')}</p>
+                                        <p className="font-semibold text-foreground text-sm">INV{t._id?.slice(-5) || t.id?.slice(-5) || 'N/A'}</p>
+                                        <p className="text-xs text-muted-foreground">{t.items?.length || 0} item(s) • {new Date(t.date || t.createdAt).toLocaleDateString('en-GB').replace(/\//g, '-')}</p>
                                     </div>
                                 </div>
                                 <div className="text-right">
-                                     <p className="font-bold text-foreground text-sm">₹{t.total.toLocaleString('en-IN')}</p>
+                                     <p className="font-bold text-foreground text-sm">₹{(t.total || 0).toLocaleString('en-IN')}</p>
                                      <p className="text-xs text-muted-foreground">{index % 3 === 0 ? 'Card' : 'UPI'}</p>
                                 </div>
                            </div>
@@ -337,19 +294,19 @@ const Dashboard: React.FC = () => {
                     <div className="space-y-3">
                         <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg">
                             <h3 className="font-semibold text-sm text-yellow-800">Low Stock Alert</h3>
-                            <p className="text-xs text-yellow-700 mb-2">{dashboardData.lowStockItems.length} medicines need restocking</p>
-                            <ul className="space-y-1 text-xs text-yellow-700 list-disc list-inside">
-                                {dashboardData.lowStockItems.slice(0,2).map(p => <li key={p.id}>{p.name} ({p.totalStock} left)</li>)}
-                            </ul>
-                            <button onClick={() => { setInventoryFilter({ status: 'low_stock' }); setActivePage('inventory'); }} className="text-xs font-bold text-yellow-800 hover:underline mt-2">View</button>
+                            <p className="text-xs text-yellow-700 mb-2">{alertData.lowStockItems.length} medicines need restocking</p>
+                            {alertData.lowStockItems.slice(0, 2).map((item, index) => (
+                                <p key={index} className="text-xs text-yellow-600">{item.name}: {item.currentStock} left</p>
+                            ))}
+                            <button onClick={() => { setInventoryFilter({ status: 'low_stock' }); setActivePage('inventory'); }} className="text-xs font-bold text-yellow-800 hover:underline mt-2">View All</button>
                         </div>
                          <div className="bg-red-50 border border-red-200 p-3 rounded-lg">
                             <h3 className="font-semibold text-sm text-red-800">Expiring Soon</h3>
-                            <p className="text-xs text-red-700 mb-2">{dashboardData.expiringSoonItems.length} medicine batches expiring within 30 days</p>
-                            <ul className="space-y-1 text-xs text-red-700 list-disc list-inside">
-                                {dashboardData.expiringSoonItems.slice(0,2).map(p => <li key={p.id + p.batch.id}>{p.name} (expires {p.batch.expiryDate.split('-').reverse().join('-')})</li>)}
-                            </ul>
-                             <button onClick={() => setActivePage('expiring')} className="text-xs font-bold text-red-800 hover:underline mt-2">View</button>
+                            <p className="text-xs text-red-700 mb-2">{alertData.expiringItems.length} medicine batches expiring within 30 days</p>
+                            {alertData.expiringItems.slice(0, 2).map((item, index) => (
+                                <p key={index} className="text-xs text-red-600">{item.productName}: {item.daysToExpiry} days left</p>
+                            ))}
+                             <button onClick={() => setActivePage('expiring')} className="text-xs font-bold text-red-800 hover:underline mt-2">View All</button>
                         </div>
                     </div>
                 </div>

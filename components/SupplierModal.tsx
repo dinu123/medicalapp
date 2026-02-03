@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Supplier } from '../types';
 import { XIcon } from './Icons';
+import { createSupplier } from '../services/supplierService';
 
 export const SupplierModal: React.FC<{
     isOpen: boolean;
@@ -25,15 +26,26 @@ export const SupplierModal: React.FC<{
         setSupplier(prev => ({ ...prev, [name]: type === 'number' ? parseFloat(value) || 0 : value }));
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        let finalSupplier: Supplier;
-        if ('id' in supplier) {
-            finalSupplier = supplier as Supplier;
-        } else {
-            finalSupplier = { ...supplier, id: `supp_${Date.now()}` };
+        try {
+            let finalSupplier: Supplier;
+            if ('id' in supplier) {
+                finalSupplier = supplier as Supplier;
+            } else {
+                // Create supplier in backend
+                const backendSupplier = await createSupplier(supplier);
+                finalSupplier = {
+                    id: backendSupplier._id || backendSupplier.id,
+                    ...supplier
+                };
+            }
+            onSave(finalSupplier);
+            onClose();
+        } catch (error) {
+            console.error('Failed to save supplier:', error);
+            alert('Failed to save supplier. Please try again.');
         }
-        onSave(finalSupplier);
     };
 
     if (!isOpen) return null;

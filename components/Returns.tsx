@@ -2,6 +2,7 @@ import React, { useState, useContext, useMemo, useEffect } from 'react';
 import { AppContext } from '../App';
 import { Transaction, Purchase, Product, Supplier, ReturnItem, CustomerReturn, SupplierReturn, Voucher, CreditNote, PurchaseItem, TransactionItem, Batch } from '../types';
 import { SearchIcon, XIcon, PrintIcon } from './Icons';
+import { searchInvoices, processCustomerReturn as processCustomerReturnAPI, processSupplierReturn as processSupplierReturnAPI } from '../services/returnsService';
 
 // Helper function to extract units per pack
 const getUnitsInPack = (pack: string): number => {
@@ -345,6 +346,7 @@ const Returns: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'customer' | 'supplier'>('customer');
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResult, setSearchResult] = useState<Transaction | Purchase | null>(null);
+    const [isSearching, setIsSearching] = useState(false);
     const [returnCart, setReturnCart] = useState<Map<string, { item: any, returnQuantity: number }>>(new Map());
     const [settlementType, setSettlementType] = useState<'refund' | 'voucher'>('refund');
     const [finalizedReturn, setFinalizedReturn] = useState<{ creditNote: CreditNote, supplier: Supplier, returnItems: ReturnItem[], originalPurchase: Purchase } | null>(null);
@@ -376,17 +378,28 @@ const Returns: React.FC = () => {
     }, [returnInitiationData, purchases, products, setReturnInitiationData]);
 
 
-    const handleSearch = () => {
-        const term = searchTerm.toLowerCase();
-        let found = null;
-        if (activeTab === 'customer') {
-            found = transactions.find(t => t.id.toLowerCase().includes(term) || t.customerName?.toLowerCase().includes(term) || t.id.slice(-6).toLowerCase() === term);
-        } else {
-            found = purchases.find(p => p.id.toLowerCase().includes(term) || p.invoiceNumber?.toLowerCase().includes(term) || p.id.slice(-6).toLowerCase() === term);
-        }
-        setSearchResult(found || null);
-        setReturnCart(new Map()); // Clear cart on new search
+    const handleSearch = async () => {
+        if (!searchTerm.trim()) return;
+        
+        setIsSearching(true);
         setSuccessMessage('');
+        
+        try {
+            const results = await searchInvoices(searchTerm, activeTab);
+            if (results && results.length > 0) {
+                setSearchResult(results[0]); // Take the first result
+                setReturnCart(new Map()); // Clear cart on new search
+            } else {
+                setSearchResult(null);
+                setSuccessMessage('No matching invoices found.');
+            }
+        } catch (error) {
+            console.error('Search error:', error);
+            setSuccessMessage('Error searching invoices. Please try again.');
+            setSearchResult(null);
+        } finally {
+            setIsSearching(false);
+        }
     };
 
     const handleReturnQuantityChange = (key: string, item: any, value: string) => {
@@ -408,22 +421,22 @@ const Returns: React.FC = () => {
     const returnSummary = useMemo(() => {
         let total = 0;
         returnCart.forEach(({ item, returnQuantity }) => {
-             if (activeTab === 'customer') {
-                const product = products.find(p => p.id === item.productId);
-                if (!product) return;
-                const unitsPerPack = getUnitsInPack(product.pack);
-                const pricePerUnit = item.price / unitsPerPack;
-                total += pricePerUnit * returnQuantity;
+            if (activeTab === 'customer') {
+                // For customer returns, use the item price directly
+                total += item.price * returnQuantity;
             } else {
+                // For supplier returns, use the purchase item price
                 const purchaseItem = (searchResult as Purchase)?.items.find(pi => pi.batchId === item.batchId);
-                if(purchaseItem) {
-                    const pricePerUnit = purchaseItem.price;
-                    total += pricePerUnit * returnQuantity;
+                if (purchaseItem) {
+                    total += purchaseItem.price * returnQuantity;
+                } else {
+                    // Fallback to item price if purchase item not found
+                    total += item.price * returnQuantity;
                 }
             }
         });
         return { total };
-    }, [returnCart, activeTab, products, searchResult]);
+    }, [returnCart, activeTab, searchResult]);
     
     const resetForm = () => {
         setSearchTerm('');
@@ -431,189 +444,209 @@ const Returns: React.FC = () => {
         setReturnCart(new Map());
         setSettlementType('refund');
         setSuccessMessage('');
+        setIsSearching(false);
     };
 
-    const processCustomerReturn = () => {
+    const processCustomerReturn = async () => {
         if (returnCart.size === 0 || !searchResult) return;
+        
         const transaction = searchResult as Transaction;
-
-        // --- Robust Data Integrity Checks ---
-        for (const item of transaction.items) {
-            const product = products.find(p => p.id === item.productId);
-            if (!product) {
-                setSuccessMessage(`Error: Product "${item.productName}" from the original invoice no longer exists. Return cannot be processed.`);
-                return;
-            }
-            const batch = product.batches.find(b => b.id === item.batchId);
-            if (!batch) {
-                setSuccessMessage(`Error: A batch for "${item.productName}" from the original invoice is missing. Return cannot be processed.`);
-                return;
-            }
+        
+        console.log('Transaction object:', transaction); // Debug log
+        console.log('Transaction ID:', transaction.id); // Debug log
+        console.log('Transaction _id:', transaction._id); // Debug log
+        
+        const transactionId = transaction.id || transaction._id;
+        
+        if (!transactionId) {
+            setSuccessMessage('Error: Transaction ID not found.');
+            return;
         }
-        // --- End of Checks ---
+        
+        const returnItems: ReturnItem[] = [];
 
-        const returnId = `RTN-CUST-${Date.now()}`;
-        const newReturnItems: ReturnItem[] = [];
-
+        // Build return items
         for (const { item, returnQuantity } of returnCart.values()) {
-            const product = products.find(p => p.id === item.productId)!;
-            const unitsPerPack = getUnitsInPack(product.pack);
-            const pricePerUnit = item.price / unitsPerPack;
-            newReturnItems.push({ 
+            returnItems.push({ 
                 productId: item.productId, 
                 productName: item.productName, 
                 batchId: item.batchId, 
                 quantity: returnQuantity, 
-                price: pricePerUnit, 
+                price: item.price, 
                 discount: 0, 
-                amount: pricePerUnit * returnQuantity 
+                amount: item.price * returnQuantity 
             });
         }
-        
-        const newReturn: CustomerReturn = { id: returnId, originalTransactionId: searchResult.id, items: newReturnItems, totalAmount: returnSummary.total, date: new Date().toISOString(), settlement: { type: settlementType }};
-        
-        setProducts(prev => {
-            const updatedProducts = JSON.parse(JSON.stringify(prev));
-            newReturnItems.forEach(item => {
-                const product = updatedProducts.find((p: Product) => p.id === item.productId);
-                if (product) { 
-                    const batch = product.batches.find((b: any) => b.id === item.batchId); 
-                    if (batch) batch.stock += item.quantity; 
-                }
-            });
-            return updatedProducts;
-        });
 
-        if (settlementType === 'voucher') {
-            const newVoucherId = `VCHR-CUST-${Date.now()}`;
-            newReturn.settlement.voucherId = newVoucherId;
-            const newVoucher: Voucher = { id: newVoucherId, customerName: (searchResult as Transaction).customerName, initialAmount: returnSummary.total, balance: returnSummary.total, createdDate: new Date().toISOString(), status: 'active' };
-            setVouchers(prev => [...prev, newVoucher]);
-            setPrintableVoucher(newVoucher);
-        } else {
-            // FIX: Create a balanced journal entry for the cash refund instead of using the non-existent setLedger.
-            addJournalEntry({
-                date: new Date().toISOString(),
-                referenceId: returnId,
-                referenceType: 'CustomerReturn',
-                narration: `Refund for return from invoice ${transaction.id.slice(-6)}`,
-                transactions: [
-                    { accountId: 'AC-SALES-RETURN', accountName: 'Sales Return', type: 'debit', amount: returnSummary.total },
-                    { accountId: 'AC-CASH', accountName: 'Cash', type: 'credit', amount: returnSummary.total }
-                ]
-            });
+        try {
+            const returnData = {
+                originalTransactionId: transactionId,
+                items: returnItems,
+                totalAmount: returnSummary.total,
+                settlementType
+            };
+
+            console.log('Sending return data:', returnData); // Debug log
+            const result = await processCustomerReturnAPI(returnData);
+            
+            if (result.success) {
+                console.log('Return processed successfully, updating stock...');
+                console.log('Return items:', returnItems);
+                console.log('Current products:', products);
+                
+                // Update local product stock (increase for customer returns)
+                setProducts(prev => {
+                    console.log('Updating products state...');
+                    const updatedProducts = [...prev];
+                    returnItems.forEach(returnItem => {
+                        console.log(`Updating stock for product ${returnItem.productId}, batch ${returnItem.batchId}`);
+                        // Try to find product by id, name, or any matching field
+                        const productIndex = updatedProducts.findIndex(p => 
+                            p.id === returnItem.productId || 
+                            p.name?.toLowerCase() === returnItem.productName?.toLowerCase()
+                        );
+                        if (productIndex !== -1) {
+                            const product = { ...updatedProducts[productIndex] };
+                            // Try to find batch by id or batchNumber
+                            const batchIndex = product.batches.findIndex(b => 
+                                b.id === returnItem.batchId || 
+                                b._id === returnItem.batchId ||
+                                b.batchNumber === returnItem.batchId
+                            );
+                            if (batchIndex !== -1) {
+                                const oldStock = product.batches[batchIndex].stock;
+                                product.batches = [...product.batches];
+                                product.batches[batchIndex] = {
+                                    ...product.batches[batchIndex],
+                                    stock: product.batches[batchIndex].stock + returnItem.quantity
+                                };
+                                console.log(`Stock updated: ${oldStock} -> ${product.batches[batchIndex].stock}`);
+                                updatedProducts[productIndex] = product;
+                            } else {
+                                console.log(`Batch ${returnItem.batchId} not found in product ${returnItem.productId}`);
+                                console.log('Available batches:', product.batches);
+                            }
+                        } else {
+                            console.log(`Product ${returnItem.productId} not found`);
+                            console.log('Available products:', updatedProducts.map(p => ({id: p.id, name: p.name})));
+                        }
+                    });
+                    console.log('Updated products:', updatedProducts);
+                    return updatedProducts;
+                });
+
+                if (settlementType === 'voucher') {
+                    const newVoucher: Voucher = { 
+                        id: result.return.voucherId, 
+                        customerName: transaction.customerName, 
+                        initialAmount: returnSummary.total, 
+                        balance: returnSummary.total, 
+                        createdDate: new Date().toISOString(), 
+                        status: 'active' 
+                    };
+                    setVouchers(prev => [...prev, newVoucher]);
+                    setPrintableVoucher(newVoucher);
+                }
+
+                setSuccessMessage('Customer return processed successfully! Stock updated.');
+                setSearchResult(null); 
+                setReturnCart(new Map());
+            }
+        } catch (error) {
+            console.error('Process return error:', error);
+            setSuccessMessage('Error processing return. Please try again.');
         }
-        setCustomerReturns(prev => [...prev, newReturn]);
-        setSuccessMessage('Customer return processed successfully!');
-        setSearchResult(null); 
-        setReturnCart(new Map());
     };
     
-    const processSupplierReturn = () => {
+    const processSupplierReturn = async () => {
         if (returnCart.size === 0 || !searchResult) return;
+        
         const purchase = searchResult as Purchase;
-
-        // --- Robust Data Integrity Checks at the start ---
         const supplier = suppliers.find(s => s.id === purchase.supplierId);
+        
         if (!supplier) {
-            setSuccessMessage(`Error: Supplier for this purchase could not be found. Return cancelled.`);
+            setSuccessMessage('Error: Supplier not found.');
             return;
         }
 
-        // Check ALL items from the original purchase, not just the ones being returned.
-        for (const item of purchase.items) {
-            const product = products.find(p => p.id === item.productId);
-            if (!product) {
-                setSuccessMessage(`Error: Product "${item.productName}" from the original invoice no longer exists. Return cannot be processed.`);
-                return;
-            }
-            // Also check if the batch still exists within that product
-            const batch = product.batches.find(b => b.id === item.batchId);
-            if (!batch) {
-                setSuccessMessage(`Error: A batch for "${item.productName}" from the original invoice is missing. Return cannot be processed.`);
-                return;
-            }
-        }
-        // --- End of Checks ---
+        const returnItems: ReturnItem[] = [];
 
-        const returnId = `RTN-SUPP-${Date.now()}`;
-        const newReturnItems: ReturnItem[] = [];
-
+        // Build return items
         for (const { item, returnQuantity } of returnCart.values()) {
             const purchaseItem = purchase.items.find(pi => pi.batchId === item.batchId);
-            if (!purchaseItem) continue;
-            newReturnItems.push({ 
+            const price = purchaseItem ? purchaseItem.price : item.price;
+            
+            returnItems.push({ 
                 productId: item.productId, 
                 productName: item.productName, 
                 batchId: item.batchId, 
                 quantity: returnQuantity, 
-                price: purchaseItem.price, 
+                price: price, 
                 discount: 0, 
-                amount: purchaseItem.price * returnQuantity 
+                amount: price * returnQuantity 
             });
         }
-        
-        if (newReturnItems.length === 0 && returnCart.size > 0) {
-            setSuccessMessage('Error: Could not match return items to original invoice. Return cancelled.');
+
+        if (returnItems.length === 0) {
+            setSuccessMessage('Error: No valid items to return.');
             return;
         }
-        
-        const newReturn: SupplierReturn = { 
-            id: returnId, 
-            originalPurchaseId: purchase.id, 
-            supplierId: purchase.supplierId, 
-            items: newReturnItems, 
-            totalAmount: returnSummary.total, 
-            date: new Date().toISOString(), 
-            settlement: { type: purchase.status === 'paid' ? 'credit_note' : 'ledger_adjustment' }
-        };
-        
-        setProducts(prev => {
-            const updatedProducts = JSON.parse(JSON.stringify(prev));
-            newReturnItems.forEach(item => {
-                const product = updatedProducts.find((p: Product) => p.id === item.productId);
-                if (product) { 
-                    const batch = product.batches.find((b: any) => b.id === item.batchId); 
-                    if (batch) batch.stock -= item.quantity; 
-                }
-            });
-            return updatedProducts;
-        });
 
-        if (newReturn.settlement.type === 'credit_note') {
-            const newCreditNoteId = `CN-SUPP-${Date.now()}`;
-            newReturn.settlement.creditNoteId = newCreditNoteId;
-            const newCreditNote: CreditNote = { 
-                id: newCreditNoteId, 
-                supplierId: purchase.supplierId, 
-                supplierReturnId: returnId, 
-                amount: returnSummary.total, 
-                date: new Date().toISOString(), 
-                status: 'open' 
+        try {
+            const returnData = {
+                originalPurchaseId: purchase.id,
+                items: returnItems,
+                totalAmount: returnSummary.total
             };
-            setCreditNotes(prev => [...prev, newCreditNote]);
-            setFinalizedReturn({ creditNote: newCreditNote, supplier, returnItems: newReturnItems, originalPurchase: purchase });
-        } else if (newReturn.settlement.type === 'ledger_adjustment') {
-            // FIX: Added missing journal entry for supplier return ledger adjustments.
-            addJournalEntry({
-                date: new Date().toISOString(),
-                referenceId: returnId,
-                referenceType: 'SupplierReturn',
-                narration: `Adjustment for returned goods to ${supplier.name}`,
-                transactions: [
-                    { accountId: supplier.id, accountName: supplier.name, type: 'debit', amount: returnSummary.total },
-                    { accountId: 'AC-PURCHASE-RETURN', accountName: 'Purchase Return', type: 'credit', amount: returnSummary.total }
-                ]
-            });
-        }
-        setSupplierReturns(prev => [...prev, newReturn]);
-        setSuccessMessage('Supplier return processed successfully!');
-        
-        if (newReturn.settlement.type !== 'credit_note') {
-             resetForm();
-        } else {
-             setSearchResult(null); 
-             setReturnCart(new Map());
+
+            const result = await processSupplierReturnAPI(returnData);
+            
+            if (result.success) {
+                // Update local product stock (decrease for supplier returns)
+                setProducts(prev => {
+                    const updatedProducts = [...prev];
+                    returnItems.forEach(returnItem => {
+                        const productIndex = updatedProducts.findIndex(p => p.id === returnItem.productId);
+                        if (productIndex !== -1) {
+                            const product = { ...updatedProducts[productIndex] };
+                            const batchIndex = product.batches.findIndex(b => b.id === returnItem.batchId);
+                            if (batchIndex !== -1) {
+                                product.batches = [...product.batches];
+                                product.batches[batchIndex] = {
+                                    ...product.batches[batchIndex],
+                                    stock: Math.max(0, product.batches[batchIndex].stock - returnItem.quantity)
+                                };
+                                updatedProducts[productIndex] = product;
+                            }
+                        }
+                    });
+                    return updatedProducts;
+                });
+
+                if (result.return.settlementType === 'credit_note') {
+                    const newCreditNote: CreditNote = { 
+                        id: result.return.creditNoteId, 
+                        supplierId: purchase.supplierId, 
+                        supplierReturnId: result.return.id, 
+                        amount: returnSummary.total, 
+                        date: new Date().toISOString(), 
+                        status: 'open' 
+                    };
+                    setCreditNotes(prev => [...prev, newCreditNote]);
+                    setFinalizedReturn({ creditNote: newCreditNote, supplier, returnItems, originalPurchase: purchase });
+                } else {
+                    resetForm();
+                }
+
+                setSuccessMessage('Supplier return processed successfully! Stock updated.');
+                if (result.return.settlementType !== 'credit_note') {
+                    setSearchResult(null); 
+                    setReturnCart(new Map());
+                }
+            }
+        } catch (error) {
+            console.error('Process supplier return error:', error);
+            setSuccessMessage('Error processing supplier return. Please try again.');
         }
     };
 
@@ -628,7 +661,7 @@ const Returns: React.FC = () => {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-4">
-                    <div className="flex gap-2"><input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()} placeholder={`Search by ${activeTab} name or Invoice ID (last 6 digits)`} className="w-full p-3 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring" /><button onClick={handleSearch} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-semibold"><SearchIcon className="w-5 h-5"/></button></div>
+                    <div className="flex gap-2"><input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()} placeholder={`Search by ${activeTab} name or Invoice ID (last 6 digits)`} className="w-full p-3 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring" /><button onClick={handleSearch} disabled={isSearching} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-semibold disabled:opacity-50">{isSearching ? 'Searching...' : <SearchIcon className="w-5 h-5"/>}</button></div>
                     {searchResult && (
                         <div className="bg-card rounded-lg border border-border p-4">
                             <div className="flex justify-between items-center mb-2">
@@ -637,7 +670,27 @@ const Returns: React.FC = () => {
                             </div>
                             <div className="text-sm space-y-1 mb-4"><p><strong>ID:</strong> {searchResult.id}</p><p><strong>Date:</strong> {new Date(searchResult.date).toLocaleDateString('en-GB')}</p><p><strong>{activeTab === 'customer' ? 'Customer:' : 'Supplier:'}</strong> {activeTab === 'customer' ? (searchResult as Transaction).customerName : suppliers.find(s => s.id === (searchResult as Purchase).supplierId)?.name}</p></div>
                             <div className="max-h-80 overflow-y-auto"><table className="w-full text-sm"><thead className="text-xs text-muted-foreground uppercase bg-secondary/50 sticky top-0"><tr><th className="p-2 text-left">Item</th><th className="p-2 text-left">Batch</th><th className="p-2 text-center">Original Qty</th><th className="p-2 w-32">Return Qty</th></tr></thead><tbody>
-                            {(searchResult as Transaction | Purchase).items.map(item => { const key = `${item.productId}-${item.batchId}`; return (<tr key={key} className="border-t border-border"><td className="p-2">{item.productName}</td><td className="p-2">{products.find(p=>p.id === item.productId)?.batches.find(b=>b.id===item.batchId)?.batchNumber}</td><td className="p-2 text-center">{item.quantity}</td><td className="p-2"><input type="number" min="0" max={item.quantity} value={returnCart.get(key)?.returnQuantity || ''} onChange={e => handleReturnQuantityChange(key, item, e.target.value)} className="w-full p-1.5 text-center border border-border rounded-md bg-input focus:ring-2 focus:ring-ring" /></td></tr>); })}</tbody></table></div>
+                            {(searchResult as Transaction | Purchase).items.map(item => { 
+                                const key = `${item.productId}-${item.batchId}`; 
+                                // Try to get product from populated data first, then fallback to local products
+                                let product = null;
+                                if (item.productId && typeof item.productId === 'object') {
+                                    product = item.productId; // Already populated
+                                } else {
+                                    product = products.find(p => p.id === item.productId);
+                                }
+                                
+                                // Find batch - try different approaches
+                                let batchNumber = 'N/A';
+                                if (product?.batches) {
+                                    const batch = product.batches.find(b => b.id === item.batchId || b._id === item.batchId);
+                                    if (batch) {
+                                        batchNumber = batch.batchNumber || batch.batch || 'Unknown';
+                                    }
+                                }
+                                
+                                return (<tr key={key} className="border-t border-border"><td className="p-2">{item.productName}</td><td className="p-2">{batchNumber}</td><td className="p-2 text-center">{item.quantity}</td><td className="p-2"><input type="number" min="0" max={item.quantity} value={returnCart.get(key)?.returnQuantity || ''} onChange={e => handleReturnQuantityChange(key, item, e.target.value)} className="w-full p-1.5 text-center border border-border rounded-md bg-input focus:ring-2 focus:ring-ring" /></td></tr>); 
+                            })}</tbody></table></div>
                         </div>
                     )}
                 </div>

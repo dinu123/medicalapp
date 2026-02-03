@@ -19,7 +19,7 @@ import ProfilePage from './components/ProfilePage';
 import { Page, Product, Transaction, Purchase, AppContextType, CartItem, InventoryFilter, TransactionFilter, GstSettings, Supplier, CustomerReturn, SupplierReturn, Voucher, CreditNote, JournalEntry, OrderListItem, PurchaseOrder, Customer, User, AuditLog, UserRole, StoreSettings } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { initialProducts, initialTransactions, initialPurchases, initialSuppliers, initialCustomers } from './data/mockData';
-import { login as authLogin } from './services/authService';
+import { login as authLogin, logout as authLogout } from './services/authService';
 
 
 const initialInventoryFilter: InventoryFilter = { status: 'all' };
@@ -192,6 +192,7 @@ const App: React.FC = () => {
     };
 
     const logout = () => {
+        authLogout();
         setCurrentUser(null);
         setActivePage('dashboard'); // Reset to default page
     };
@@ -253,18 +254,31 @@ const App: React.FC = () => {
     }, [customers, setCustomers]);
     
     const updateProductQuantityInCart = useCallback((productId: string, totalQuantity: number) => {
+        console.log('updateProductQuantityInCart called with:', productId, totalQuantity);
         setCart(prevCart => {
             const product = products.find(p => p.id === productId);
-            if (!product) return prevCart;
+            console.log('Found product in products array:', product);
+            if (!product) {
+                console.log('Product not found in products array');
+                return prevCart;
+            }
     
             const otherItemsInCart = prevCart.filter(item => item.productId !== productId);
+            console.log('Other items in cart:', otherItemsInCart);
     
             if (totalQuantity <= 0) {
+                console.log('Total quantity <= 0, finding first available batch');
+                console.log('Product batches:', product.batches);
                 const firstAvailableBatch = product.batches
-                    .filter(b => b.stock > 0)
+                    .filter(b => {
+                        console.log('Checking batch:', b, 'stock:', b.stock);
+                        return b.stock > 0;
+                    })
                     .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0];
                 
+                console.log('First available batch:', firstAvailableBatch);
                 if (!firstAvailableBatch) {
+                    console.log('No available batch found');
                     return otherItemsInCart;
                 }
     
@@ -318,12 +332,33 @@ const App: React.FC = () => {
     }, [products, setCart, gstSettings]);
 
     const addToCart = useCallback((product: Product) => {
-        const productInCart = cart.some(item => item.productId === product.id);
-        if (productInCart) {
+        // Use the product data directly instead of looking it up
+        const firstAvailableBatch = product.batches
+            .filter(b => b.stock > 0)
+            .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0];
+        
+        if (!firstAvailableBatch) {
             return;
         }
-        updateProductQuantityInCart(product.id, 0);
-    }, [cart, updateProductQuantityInCart]);
+        
+        const taxRate = product.hsnCode.startsWith('3004') ? gstSettings.general : product.hsnCode.startsWith('2106') ? gstSettings.food : gstSettings.subsidized;
+        const cartItem: CartItem = {
+            productId: product.id,
+            productName: product.name,
+            quantity: 0,
+            price: firstAvailableBatch.mrp,
+            tax: taxRate,
+            batchId: firstAvailableBatch.id || firstAvailableBatch._id,
+        };
+        
+        setCart(prev => {
+            const existingIndex = prev.findIndex(item => item.productId === product.id);
+            if (existingIndex >= 0) {
+                return prev; // Don't add if already exists
+            }
+            return [...prev, cartItem];
+        });
+    }, [gstSettings, setCart]);
 
 
     const removeProductFromCart = useCallback((productId: string) => {
@@ -369,7 +404,7 @@ const App: React.FC = () => {
         journal, addJournalEntry,
         auditLogs, logAction,
         activePage, setActivePage,
-        cart, addToCart, updateProductQuantityInCart, removeProductFromCart, clearCart,
+        cart, setCart, addToCart, updateProductQuantityInCart, removeProductFromCart, clearCart,
         inventoryFilter, setInventoryFilter,
         transactionFilter, setTransactionFilter,
         gstSettings, setGstSettings,

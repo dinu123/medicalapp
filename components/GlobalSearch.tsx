@@ -1,14 +1,17 @@
 import React, { useState, useContext, useEffect, useRef } from 'react';
 import { AppContext } from '../App';
-import { Product, Page, Transaction, Purchase } from '../types';
-import { SearchIcon, DashboardIcon, InventoryIcon, TransactionsIcon, AnalyticsIcon, SparklesIcon, LinkIcon, MonthlySalesIcon, MonthlyPurchasesIcon } from './Icons';
+import { Page } from '../types';
+import { SearchIcon, DashboardIcon, InventoryIcon, TransactionsIcon, AnalyticsIcon, SparklesIcon, LinkIcon, MonthlySalesIcon, MonthlyPurchasesIcon, UserIcon, SuppliersIcon } from './Icons';
+import { globalSearch } from '../services/searchService';
 
 // Define a type for search results
 type SearchResult = 
-    | { type: 'product'; data: Product }
+    | { type: 'product'; data: any }
     | { type: 'page'; data: { id: Page; label: string; icon: React.ReactNode } }
-    | { type: 'sale'; data: Transaction }
-    | { type: 'purchase'; data: Purchase };
+    | { type: 'sale'; data: any }
+    | { type: 'purchase'; data: any }
+    | { type: 'customer'; data: any }
+    | { type: 'supplier'; data: any };
 
 // Define the list of searchable pages
 const searchablePages: { id: Page; label: string; icon: React.ReactNode }[] = [
@@ -21,59 +24,44 @@ const searchablePages: { id: Page; label: string; icon: React.ReactNode }[] = [
 ];
 
 const GlobalSearch: React.FC = () => {
-    const { products, transactions, purchases, suppliers, addToCart, setActivePage } = useContext(AppContext);
+    const { addToCart, setActivePage, cart } = useContext(AppContext);
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<SearchResult[]>([]);
     const [isOpen, setIsOpen] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
     const searchRef = useRef<HTMLDivElement>(null);
     const [toast, setToast] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
 
     useEffect(() => {
-        if (query.length > 1) {
-            const lowerCaseQuery = query.toLowerCase();
-            
-            // Filter products
-            const productResults: SearchResult[] = products
-                .filter(p =>
-                    p.name.toLowerCase().includes(lowerCaseQuery) ||
-                    p.manufacturer.toLowerCase().includes(lowerCaseQuery) ||
-                    // FIX: Check for batchNumber inside the batches array.
-                    p.batches.some(b => b.batchNumber.toLowerCase().includes(lowerCaseQuery))
-                )
-                .map(p => ({ type: 'product', data: p }));
-
-            // Filter pages
-            const pageResults: SearchResult[] = searchablePages
-                .filter(p => p.label.toLowerCase().includes(lowerCaseQuery))
-                .map(p => ({ type: 'page', data: p }));
-
-            // Filter sales (transactions)
-            const saleResults: SearchResult[] = transactions
-                .filter(t =>
-                    t.id.toLowerCase().includes(lowerCaseQuery) ||
-                    (t.customerName && t.customerName.toLowerCase().includes(lowerCaseQuery))
-                )
-                .map(t => ({ type: 'sale', data: t }));
-            
-            // Filter purchases
-            const purchaseResults: SearchResult[] = purchases
-                .filter(p => {
-                    const supplier = suppliers.find(s => s.id === p.supplierId);
-                    return p.id.toLowerCase().includes(lowerCaseQuery) ||
-                    (supplier && supplier.name.toLowerCase().includes(lowerCaseQuery))
-                })
-                .map(p => ({ type: 'purchase', data: p }));
-            
-            // Combine and limit results
-            const combinedResults = [...pageResults, ...productResults, ...saleResults, ...purchaseResults].slice(0, 10);
-            
-            setResults(combinedResults);
-            setIsOpen(true);
-        } else {
-            setResults([]);
-            setIsOpen(false);
-        }
-    }, [query, products, transactions, purchases, suppliers]);
+        const searchData = async () => {
+            if (query.length > 1) {
+                setIsLoading(true);
+                try {
+                    const backendResults = await globalSearch(query);
+                    
+                    // Add page results
+                    const pageResults: SearchResult[] = searchablePages
+                        .filter(p => p.label.toLowerCase().includes(query.toLowerCase()))
+                        .map(p => ({ type: 'page', data: p }));
+                    
+                    const combinedResults = [...pageResults, ...backendResults].slice(0, 10);
+                    setResults(combinedResults);
+                    setIsOpen(true);
+                } catch (error) {
+                    console.error('Search failed:', error);
+                    setResults([]);
+                } finally {
+                    setIsLoading(false);
+                }
+            } else {
+                setResults([]);
+                setIsOpen(false);
+            }
+        };
+        
+        const timeoutId = setTimeout(searchData, 300);
+        return () => clearTimeout(timeoutId);
+    }, [query]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -94,9 +82,25 @@ const GlobalSearch: React.FC = () => {
         }, 2000);
     };
 
-    const handleAddToCart = (product: Product) => {
-        addToCart(product);
-        showToast(`'${product.name}' added to cart!`);
+    const handleAddToCart = (productData: any) => {
+        const formattedProduct = {
+            id: productData._id || productData.id,
+            name: productData.name,
+            hsnCode: productData.hsnCode || '',
+            batches: productData.batches || []
+        };
+        
+        const productInCart = cart.some(item => item.productId === formattedProduct.id);
+        
+        if (productInCart) {
+            setActivePage('billing');
+            showToast(`'${productData.name}' is already in cart. Opening billing...`);
+        } else {
+            addToCart(formattedProduct);
+            setActivePage('billing');
+            showToast(`'${productData.name}' added to cart!`);
+        }
+        
         setQuery('');
         setIsOpen(false);
     };
@@ -138,23 +142,19 @@ const GlobalSearch: React.FC = () => {
                            const key = `${result.type}-${result.data.id}-${index}`;
                            switch (result.type) {
                                 case 'product':
-                                    // FIX: Calculate totalStock and get MRP from an available batch.
-                                    const totalStock = result.data.batches.reduce((sum, b) => sum + b.stock, 0);
-                                    const firstBatchWithStock = result.data.batches.find(b => b.stock > 0);
-                                    const mrp = firstBatchWithStock ? firstBatchWithStock.mrp : 0;
                                     return (
                                         <li key={key} className="border-b border-border last:border-b-0">
                                             <div className="flex justify-between items-center p-2 px-3 hover:bg-secondary/50">
                                                 <div>
                                                     <p className="font-semibold text-foreground text-sm">{result.data.name}</p>
-                                                    <p className="text-xs text-muted-foreground">Stock: {totalStock} | ₹{mrp.toFixed(2)}</p>
+                                                    <p className="text-xs text-muted-foreground">Stock: {result.data.totalStock} | ₹{result.data.mrp?.toFixed(2) || '0.00'}</p>
                                                 </div>
                                                 <button
                                                     onClick={() => handleAddToCart(result.data)}
                                                     className="px-3 py-1 bg-primary text-primary-foreground text-xs rounded-md hover:bg-primary/90 font-semibold"
-                                                    disabled={totalStock === 0}
+                                                    disabled={result.data.totalStock === 0}
                                                 >
-                                                    {totalStock > 0 ? 'Add' : 'Out'}
+                                                    {result.data.totalStock > 0 ? (cart.some(item => item.productId === (result.data._id || result.data.id)) ? 'View' : 'Add') : 'Out'}
                                                 </button>
                                             </div>
                                         </li>
@@ -181,8 +181,8 @@ const GlobalSearch: React.FC = () => {
                                                 <div className="flex items-center gap-3">
                                                     <MonthlySalesIcon className="w-5 h-5 text-muted-foreground"/>
                                                     <div>
-                                                        <p className="font-semibold text-foreground text-sm">Sale: {result.data.customerName}</p>
-                                                        <p className="text-xs text-muted-foreground">ID: ...{result.data.id.slice(-6)} &bull; ₹{result.data.total.toFixed(2)}</p>
+                                                        <p className="font-semibold text-foreground text-sm">Sale: {result.data.customerName || 'N/A'}</p>
+                                                        <p className="text-xs text-muted-foreground">ID: ...{(result.data._id || result.data.id)?.slice(-6)} • ₹{(result.data.total || 0).toFixed(2)}</p>
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2 text-muted-foreground">
@@ -193,15 +193,14 @@ const GlobalSearch: React.FC = () => {
                                         </li>
                                     );
                                 case 'purchase':
-                                    const supplierName = suppliers.find(s => s.id === result.data.supplierId)?.name || 'N/A';
                                     return (
                                         <li key={key} className="border-b border-border last:border-b-0">
                                              <button onClick={handleNavigateToHistory} className="w-full text-left p-2 px-3 flex justify-between items-center hover:bg-secondary/50">
                                                 <div className="flex items-center gap-3">
                                                     <MonthlyPurchasesIcon className="w-5 h-5 text-muted-foreground"/>
                                                     <div>
-                                                        <p className="font-semibold text-foreground text-sm">Purchase: {supplierName}</p>
-                                                        <p className="text-xs text-muted-foreground">ID: ...{result.data.id.slice(-6)} &bull; ₹{result.data.total.toFixed(2)}</p>
+                                                        <p className="font-semibold text-foreground text-sm">Purchase: {result.data.supplierName || 'N/A'}</p>
+                                                        <p className="text-xs text-muted-foreground">ID: ...{(result.data._id || result.data.id)?.slice(-6)} • ₹{(result.data.total || 0).toFixed(2)}</p>
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2 text-muted-foreground">
@@ -210,7 +209,43 @@ const GlobalSearch: React.FC = () => {
                                                 </div>
                                             </button>
                                         </li>
-                                    )
+                                    );
+                                case 'customer':
+                                    return (
+                                        <li key={key} className="border-b border-border last:border-b-0">
+                                            <button onClick={() => handleNavigate('billing')} className="w-full text-left p-2 px-3 flex justify-between items-center hover:bg-secondary/50">
+                                                <div className="flex items-center gap-3">
+                                                    <UserIcon className="w-5 h-5 text-muted-foreground"/>
+                                                    <div>
+                                                        <p className="font-semibold text-foreground text-sm">Customer: {result.data.name}</p>
+                                                        <p className="text-xs text-muted-foreground">Phone: {result.data.phoneNumber}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2 text-muted-foreground">
+                                                    <span className="text-xs">Bill</span>
+                                                    <LinkIcon className="w-4 h-4"/>
+                                                </div>
+                                            </button>
+                                        </li>
+                                    );
+                                case 'supplier':
+                                    return (
+                                        <li key={key} className="border-b border-border last:border-b-0">
+                                            <button onClick={() => handleNavigate('suppliers')} className="w-full text-left p-2 px-3 flex justify-between items-center hover:bg-secondary/50">
+                                                <div className="flex items-center gap-3">
+                                                    <SuppliersIcon className="w-5 h-5 text-muted-foreground"/>
+                                                    <div>
+                                                        <p className="font-semibold text-foreground text-sm">Supplier: {result.data.name}</p>
+                                                        <p className="text-xs text-muted-foreground">Contact: {result.data.contactPerson}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2 text-muted-foreground">
+                                                    <span className="text-xs">View</span>
+                                                    <LinkIcon className="w-4 h-4"/>
+                                                </div>
+                                            </button>
+                                        </li>
+                                    );
                                 default:
                                     return null;
                            }
@@ -218,7 +253,12 @@ const GlobalSearch: React.FC = () => {
                     </ul>
                 </div>
             )}
-            {isOpen && results.length === 0 && query.length > 1 && (
+            {isOpen && isLoading && (
+                <div className="absolute top-full mt-2 w-full bg-card border border-border rounded-lg shadow-lg z-50 p-4">
+                    <p className="text-center text-sm text-muted-foreground">Searching...</p>
+                </div>
+            )}
+            {isOpen && !isLoading && results.length === 0 && query.length > 1 && (
                  <div className="absolute top-full mt-2 w-full bg-card border border-border rounded-lg shadow-lg z-50 p-4">
                      <p className="text-center text-sm text-muted-foreground">No results found.</p>
                  </div>

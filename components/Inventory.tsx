@@ -6,6 +6,8 @@ import BulkUploadModal from './BulkUploadModal';
 import { SupplierModal } from './SupplierModal';
 import { getInventoryAnalysis } from '../services/geminiService';
 import { saveFile } from '../services/db';
+import { createProduct, updateProduct, searchProducts, getInventoryStats, getFilteredProducts } from '../services/productService';
+import { createSupplier, getSuppliers } from '../services/supplierService';
 
 type PaymentMethod = 'cash' | 'bank' | 'upi';
 type NewProductType = 'strip' | 'bottle' | 'tube' | 'other';
@@ -58,6 +60,9 @@ const AddStockModal: React.FC<{
     const [stripInfo, setStripInfo] = useState({ units: 10, type: 'tabs' });
     const [liquidInfo, setLiquidInfo] = useState({ volume: 200, unit: 'ml' });
     const [otherPack, setOtherPack] = useState('1 pc');
+
+    const [searchResults, setSearchResults] = useState<any[]>([]);
+    const [showResults, setShowResults] = useState(false);
 
 
     useEffect(() => {
@@ -210,9 +215,24 @@ const AddStockModal: React.FC<{
         return { baseAmount, discountAmount, subtotal, gstAmount, total, gstRate, cgst, sgst };
     }, [batch, product, gstSettings]);
 
-    const handleProductNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleProductNameChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const name = e.target.value;
         setProduct(p => ({ ...p, name }));
+        
+        if (name.length >= 3) {
+            try {
+                const results = await searchProducts(name);
+                setSearchResults(results);
+                setShowResults(true);
+            } catch (error) {
+                console.error('Search failed:', error);
+                setSearchResults([]);
+            }
+        } else {
+            setSearchResults([]);
+            setShowResults(false);
+        }
+        
         const foundProduct = products.find(p => p.name.toLowerCase() === name.toLowerCase());
         
         if (foundProduct) {
@@ -248,6 +268,25 @@ const AddStockModal: React.FC<{
                 minStock: 20,
             }));
         }
+    };
+
+    const handleSelectProduct = (selectedProduct: any) => {
+        const formattedProduct = {
+            id: selectedProduct._id || selectedProduct.id,
+            name: selectedProduct.name,
+            hsnCode: selectedProduct.hsnCode,
+            pack: selectedProduct.pack,
+            manufacturer: selectedProduct.manufacturer,
+            salts: selectedProduct.salts,
+            schedule: selectedProduct.schedule,
+            category: selectedProduct.category,
+            minStock: selectedProduct.minStock,
+            batches: selectedProduct.batches || []
+        };
+        
+        setProduct(formattedProduct);
+        setExistingProduct(formattedProduct);
+        setShowResults(false);
     };
 
     const handleProductChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -337,8 +376,20 @@ const AddStockModal: React.FC<{
                         <div className="p-4 border border-border rounded-lg">
                             <h3 className="font-bold mb-3 text-lg">Medicine & Batch Details</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div><label className={labelClass}>Product Name</label><input type="text" name="name" value={product.name || ''} onChange={handleProductNameChange} required className={inputClass} list="product-names" placeholder="Search or enter new medicine"/></div>
-                                <datalist id="product-names">{products.map(p => <option key={p.id} value={p.name} />)}</datalist>
+                                <div className="relative">
+                                    <label className={labelClass}>Product Name</label>
+                                    <input type="text" name="name" value={product.name || ''} onChange={handleProductNameChange} required className={inputClass} placeholder="Search or enter new medicine" autoComplete="off" />
+                                    {showResults && searchResults.length > 0 && (
+                                        <div className="absolute top-full mt-1 w-full bg-card border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
+                                            {searchResults.map(p => (
+                                                <div key={p._id} onClick={() => handleSelectProduct(p)} className="p-3 cursor-pointer hover:bg-secondary/50 border-b border-border last:border-b-0">
+                                                    <p className="font-semibold">{p.name}</p>
+                                                    <p className="text-xs text-muted-foreground">{p.manufacturer} - {p.pack}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                                 <div><label className={labelClass}>HSN Code</label><input type="text" name="hsnCode" value={product.hsnCode || ''} onChange={handleProductChange} required className={inputClass} disabled={!!existingProduct} /></div>
                                 
                                 {existingProduct ? ( <div><label className={labelClass}>Pack Size</label><input type="text" value={product.pack || ''} className={inputClass} disabled /></div> ) : ( <div className="md:col-span-2"> <label className={labelClass}>Product Type</label> <div className="flex flex-wrap gap-1 rounded-lg bg-input p-1.5 border border-border mb-2">{ (['strip', 'bottle', 'tube', 'other'] as NewProductType[]).map(t => ( <button type="button" key={t} onClick={() => setNewProductType(t)} disabled={!!existingProduct} className={`px-3 py-1.5 text-sm rounded-md flex-1 capitalize ${newProductType === t ? 'bg-primary text-primary-foreground font-semibold shadow' : 'hover:bg-secondary/80'}`}>{t === 'strip' ? 'Tablets/Caps' : t}</button> ))}</div> {renderPackInputs()} </div> )}
@@ -727,7 +778,7 @@ const PurchaseOrderList: React.FC = () => {
 }
 
 const Inventory: React.FC = () => {
-    const { products, setProducts, transactions, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, gstSettings, orderList, setOrderList, addJournalEntry, currentUser, logAction } = useContext(AppContext);
+    const { products, setProducts, transactions, purchases, setPurchases, inventoryFilter, setInventoryFilter, suppliers, setSuppliers, gstSettings, orderList, setOrderList, addJournalEntry, currentUser, logAction } = useContext(AppContext);
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
@@ -744,6 +795,82 @@ const Inventory: React.FC = () => {
     
     const [aiSummary, setAiSummary] = useState('');
     const [isAiSummaryLoading, setIsAiSummaryLoading] = useState(false);
+    const [inventoryStats, setInventoryStats] = useState({ totalItems: 0, lowStockCount: 0, outOfStockCount: 0, totalValue: 0 });
+
+    // Fetch suppliers from backend on component mount
+    useEffect(() => {
+        const fetchSuppliers = async () => {
+            try {
+                const backendSuppliers = await getSuppliers();
+                console.log('Fetched suppliers from backend:', backendSuppliers);
+                
+                // Format suppliers from backend
+                const formattedSuppliers = backendSuppliers.map((s: any) => ({
+                    id: s._id || s.id,
+                    name: s.name,
+                    address: s.address,
+                    contact: s.contact,
+                    gstin: s.gstin,
+                    dlNumber: s.dlNumber,
+                    foodLicenseNumber: s.foodLicenseNumber,
+                    defaultDiscount: s.defaultDiscount
+                }));
+                
+                setSuppliers(formattedSuppliers);
+            } catch (error) {
+                console.error('Failed to fetch suppliers:', error);
+            }
+        };
+
+        fetchSuppliers();
+    }, []);
+
+    // Fetch inventory stats
+    useEffect(() => {
+        const fetchStats = async () => {
+            try {
+                const stats = await getInventoryStats();
+                setInventoryStats(stats);
+            } catch (error) {
+                console.error('Failed to fetch inventory stats:', error);
+            }
+        };
+        fetchStats();
+    }, []);
+
+    // Fetch filtered products when filters change
+    useEffect(() => {
+        const fetchFilteredProducts = async () => {
+            try {
+                const filters = {
+                    search: searchTerm,
+                    category: categoryFilter !== 'All Categories' ? categoryFilter : '',
+                    status: statusFilter,
+                    tag: tagFilter !== 'all' ? tagFilter : ''
+                };
+                const filtered = await getFilteredProducts(filters);
+                const formattedProducts = filtered.map((p: any) => ({
+                    id: p._id || p.id,
+                    name: p.name,
+                    hsnCode: p.hsnCode,
+                    pack: p.pack,
+                    manufacturer: p.manufacturer,
+                    salts: p.salts,
+                    schedule: p.schedule,
+                    category: p.category,
+                    minStock: p.minStock,
+                    batches: p.batches || [],
+                    isOrdered: p.isOrdered,
+                    orderLater: p.orderLater
+                }));
+                setProducts(formattedProducts);
+            } catch (error) {
+                console.error('Failed to fetch filtered products:', error);
+            }
+        };
+        
+        fetchFilteredProducts();
+    }, [searchTerm, categoryFilter, statusFilter, tagFilter]);
 
     const handleGenerateAiSummary = async () => {
         setIsAiSummaryLoading(true);
@@ -874,7 +1001,7 @@ const Inventory: React.FC = () => {
             .sort((a,b) => a.name.localeCompare(b.name));
     }, [products, searchTerm, categoryFilter, statusFilter, tagFilter]);
 
-    const handleSaveStock = (
+    const handleSaveStock = async (
         productData: Partial<Product>,
         batchData: Omit<Batch, 'id'>,
         purchaseStatus: PurchaseStatus,
@@ -886,22 +1013,34 @@ const Inventory: React.FC = () => {
         let updatedProduct: Product;
         let finalProductId: string;
 
-        setProducts(prev => {
-            const existingProductIndex = prev.findIndex(p => p.id === productData.id || (productData.name && p.name.toLowerCase() === productData.name.toLowerCase()));
-
+        try {
+            // Check if product exists
+            const existingProductIndex = products.findIndex(p => p.id === productData.id || (productData.name && p.name.toLowerCase() === productData.name.toLowerCase()));
+            
             if (existingProductIndex > -1) {
-                const productsCopy = [...prev];
-                const productToUpdate = { ...productsCopy[existingProductIndex] };
-                productToUpdate.batches = [...productToUpdate.batches, newBatch];
-                productToUpdate.isOrdered = false; // Mark as received
-                productsCopy[existingProductIndex] = productToUpdate;
-                updatedProduct = productToUpdate;
-                finalProductId = updatedProduct.id;
-                return productsCopy;
+                // Update existing product
+                const existingProduct = products[existingProductIndex];
+                const updatedProductData = {
+                    ...existingProduct,
+                    batches: [...existingProduct.batches, newBatch],
+                    isOrdered: false
+                };
+                
+                // Update in backend
+                await updateProduct(existingProduct.id, updatedProductData);
+                
+                // Update local state
+                setProducts(prev => {
+                    const productsCopy = [...prev];
+                    productsCopy[existingProductIndex] = updatedProductData;
+                    return productsCopy;
+                });
+                
+                updatedProduct = updatedProductData;
+                finalProductId = existingProduct.id;
             } else {
-                finalProductId = `prod_${Date.now()}`;
-                updatedProduct = {
-                    id: finalProductId,
+                // Create new product
+                const newProductData = {
                     name: productData.name!,
                     hsnCode: productData.hsnCode!,
                     pack: productData.pack!,
@@ -910,11 +1049,41 @@ const Inventory: React.FC = () => {
                     schedule: productData.schedule,
                     category: productData.category,
                     minStock: productData.minStock,
-                    batches: [newBatch]
+                    batches: [{
+                        batchNumber: newBatch.batchNumber,
+                        expiryDate: newBatch.expiryDate,
+                        stock: newBatch.stock,
+                        mrp: newBatch.mrp,
+                        price: newBatch.price,
+                        discount: newBatch.discount
+                    }]
                 };
-                return [...prev, updatedProduct];
+                
+                // Create in backend
+                const backendProduct = await createProduct(newProductData);
+                finalProductId = backendProduct._id || backendProduct.id;
+                
+                // Update local state
+                updatedProduct = {
+                    id: finalProductId,
+                    ...newProductData
+                };
+                
+                setProducts(prev => [...prev, updatedProduct]);
             }
-        });
+            
+            console.log('Product saved to backend successfully');
+        } catch (error) {
+            console.error('Failed to save product to backend:', error);
+            // Check if it's an auth error
+            if (error instanceof Error && error.message.includes('token')) {
+                alert('Session expired. Please login again.');
+                // You might want to redirect to login here
+            } else {
+                alert('Failed to save product. Please try again.');
+            }
+            return;
+        }
         
         logAction('STOCK_ADDED', {
             productName: productData.name,
@@ -1289,10 +1458,10 @@ const Inventory: React.FC = () => {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-                <StatCard title="Total Items" value={products.length.toString()} subtitle="Unique medicines in stock" icon={<TotalItemsIcon className="w-8 h-8 text-indigo-500" />} iconBgColor="bg-indigo-100" />
-                <StatCard title="Low Stock" value={lowStockCount.toString()} subtitle="Need restocking" icon={<LowStockIcon className="w-8 h-8 text-amber-500" />} iconBgColor="bg-amber-100" />
-                <StatCard title="Out of Stock" value={outOfStockCount.toString()} subtitle="Completely depleted" icon={<OutOfStockIcon className="w-8 h-8 text-red-500" />} iconBgColor="bg-red-100" />
-                <StatCard title="Total Value" value={`₹${totalValue.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} subtitle="Current inventory value" icon={<TotalValueIcon className="w-8 h-8 text-green-500" />} iconBgColor="bg-green-100" />
+                <StatCard title="Total Items" value={inventoryStats.totalItems.toString()} subtitle="Unique medicines in stock" icon={<TotalItemsIcon className="w-8 h-8 text-indigo-500" />} iconBgColor="bg-indigo-100" />
+                <StatCard title="Low Stock" value={inventoryStats.lowStockCount.toString()} subtitle="Need restocking" icon={<LowStockIcon className="w-8 h-8 text-amber-500" />} iconBgColor="bg-amber-100" />
+                <StatCard title="Out of Stock" value={inventoryStats.outOfStockCount.toString()} subtitle="Completely depleted" icon={<OutOfStockIcon className="w-8 h-8 text-red-500" />} iconBgColor="bg-red-100" />
+                <StatCard title="Total Value" value={`₹${inventoryStats.totalValue.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} subtitle="Current inventory value" icon={<TotalValueIcon className="w-8 h-8 text-green-500" />} iconBgColor="bg-green-100" />
             </div>
 
             <div className="bg-card rounded-xl border border-border p-5 mb-6">

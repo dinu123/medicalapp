@@ -14,6 +14,10 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      server: {
+        cors: true,
+        port: 8000
       }
     };
 });

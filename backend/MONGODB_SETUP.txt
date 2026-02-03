@@ -1,0 +1,20 @@
+MongoDB Installation Steps:
+
+1. Download MongoDB Community Server:
+   https://www.mongodb.com/try/download/community
+
+2. Run the installer (.msi file)
+
+3. During installation:
+   - Choose "Complete" setup
+   - Install as Windows Service (checked)
+   - Install MongoDB Compass (optional GUI)
+
+4. After installation, MongoDB should start automatically
+
+5. Test connection by restarting your backend:
+   node server.js
+
+Alternative - Quick Docker setup:
+If you have Docker Desktop installed:
+docker run -d -p 27017:27017 --name mongodb mongo:latest

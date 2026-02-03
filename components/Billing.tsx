@@ -4,6 +4,9 @@ import { Product, CartItem, Transaction, Voucher, Batch, JournalTransaction, Cus
 import { XIcon, SearchIcon, CashIcon, CardIcon, UpiIcon, PrintIcon, CreditIcon, ChevronDownIcon, CameraIcon, CheckIcon, RedoIcon, UploadCloudIcon } from './Icons';
 import { parsePrescription } from '../services/geminiService';
 import { saveFile } from '../services/db';
+import { createTransaction } from '../services/transactionService';
+import { searchCustomers, createOrUpdateCustomer } from '../services/customerService';
+import { searchProducts } from '../services/productService';
 
 // Helper function to extract units per pack (e.g., tablets, capsules)
 const getUnitsInPack = (pack: string): number => {
@@ -44,11 +47,20 @@ const InvoiceModal: React.FC<{
 
         cart.forEach(item => {
             const product = products.find(p => p.id === item.productId);
-            const batch = product?.batches.find(b => b.id === item.batchId);
-            if (!product || !batch) return;
+            // If product not found in products array, create a minimal product object
+            const productData = product || {
+                id: item.productId,
+                name: item.productName,
+                hsnCode: 'N/A',
+                pack: '1 unit',
+                manufacturer: 'N/A',
+                batches: [{ id: item.batchId, batchNumber: 'N/A', stock: 1, mrp: item.price, expiryDate: new Date().toISOString() }]
+            };
+            const batch = productData.batches.find(b => b.id === item.batchId) || productData.batches[0];
+            if (!productData || !batch) return;
 
             const existing = consolidated.get(item.productId);
-            const unitsPerPack = getUnitsInPack(product.pack);
+            const unitsPerPack = getUnitsInPack(productData.pack);
             const pricePerUnit = item.price / unitsPerPack;
             const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
             const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
@@ -60,7 +72,7 @@ const InvoiceModal: React.FC<{
                 existing.batches.push({ batch, quantity: item.quantity });
             } else {
                 consolidated.set(item.productId, {
-                    product,
+                    product: productData,
                     totalQuantity: item.quantity,
                     totalValue: itemValue,
                     batches: [{ batch, quantity: item.quantity }],
@@ -468,7 +480,7 @@ const PrescriptionScannerModal: React.FC<{
 
 
 const Sell: React.FC = () => {
-    const { products, setProducts, setTransactions, cart, addToCart, updateProductQuantityInCart, removeProductFromCart, clearCart, gstSettings, vouchers, setVouchers, addJournalEntry, findOrCreateCustomer } = useContext(AppContext);
+    const { products, setProducts, setTransactions, cart, addToCart, updateProductQuantityInCart, removeProductFromCart, clearCart, gstSettings, vouchers, setVouchers, addJournalEntry, findOrCreateCustomer, setCart } = useContext(AppContext);
     
     // Search State
     const [searchTerm, setSearchTerm] = useState('');
@@ -476,6 +488,13 @@ const Sell: React.FC = () => {
     const [focusedIndex, setFocusedIndex] = useState(-1);
     const [showResults, setShowResults] = useState(false);
     const searchRef = useRef<HTMLDivElement>(null);
+
+    // Customer Search State
+    const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+    const [customerSearchResults, setCustomerSearchResults] = useState<any[]>([]);
+    const [showCustomerResults, setShowCustomerResults] = useState(false);
+    const [customerFocusedIndex, setCustomerFocusedIndex] = useState(-1);
+    const customerSearchRef = useRef<HTMLDivElement>(null);
 
     // Bill State
     const [customerName, setCustomerName] = useState('');
@@ -514,21 +533,51 @@ const Sell: React.FC = () => {
     );
 
     useEffect(() => {
-        if (searchTerm.length > 1) {
-            const lowerCaseTerm = searchTerm.toLowerCase();
-            const results = productsWithStock.filter(p =>
-                p.name.toLowerCase().includes(lowerCaseTerm) ||
-                p.manufacturer.toLowerCase().includes(lowerCaseTerm) ||
-                (p.salts && p.salts.toLowerCase().includes(lowerCaseTerm))
-            ).slice(0, 7);
-            setSearchResults(results);
-            setShowResults(true);
-            setFocusedIndex(-1);
-        } else {
-            setSearchResults([]);
-            setShowResults(false);
-        }
-    }, [searchTerm, productsWithStock]);
+        const searchProductsAsync = async () => {
+            if (searchTerm.length >= 3) {
+                try {
+                    const results = await searchProducts(searchTerm);
+                    setSearchResults(results.slice(0, 7));
+                    setShowResults(true);
+                    setFocusedIndex(-1);
+                } catch (error) {
+                    console.error('Product search failed:', error);
+                    setSearchResults([]);
+                    setShowResults(false);
+                }
+            } else {
+                setSearchResults([]);
+                setShowResults(false);
+            }
+        };
+        
+        const debounceTimer = setTimeout(searchProductsAsync, 300);
+        return () => clearTimeout(debounceTimer);
+    }, [searchTerm]);
+    
+    // Customer search effect
+    useEffect(() => {
+        const searchCustomersAsync = async () => {
+            if (customerSearchTerm.length >= 3) {
+                try {
+                    const results = await searchCustomers(customerSearchTerm);
+                    setCustomerSearchResults(results);
+                    setShowCustomerResults(true);
+                    setCustomerFocusedIndex(-1);
+                } catch (error) {
+                    console.error('Customer search failed:', error);
+                    setCustomerSearchResults([]);
+                    setShowCustomerResults(false);
+                }
+            } else {
+                setCustomerSearchResults([]);
+                setShowCustomerResults(false);
+            }
+        };
+        
+        const debounceTimer = setTimeout(searchCustomersAsync, 300);
+        return () => clearTimeout(debounceTimer);
+    }, [customerSearchTerm]);
     
     // Find available vouchers when customer name is typed
     useEffect(() => {
@@ -565,15 +614,59 @@ const Sell: React.FC = () => {
             if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
                 setShowResults(false);
             }
+            if (customerSearchRef.current && !customerSearchRef.current.contains(event.target as Node)) {
+                setShowCustomerResults(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
     const handleSelectProduct = (product: Product) => {
-        addToCart(product);
+        // Normalize product data - ensure it has 'id' field and batches have 'id' fields
+        const normalizedProduct = {
+            ...product,
+            id: product.id || product._id,
+            batches: product.batches.map(batch => ({
+                ...batch,
+                id: batch.id || batch._id
+            }))
+        };
+        addToCart(normalizedProduct);
         setSearchTerm('');
         setShowResults(false);
+    };
+    
+    const handleSelectCustomer = (customer: any) => {
+        setCustomerName(customer.name);
+        setContactNumber(customer.phoneNumber);
+        setCustomerSearchTerm(customer.name);
+        setShowCustomerResults(false);
+    };
+    
+    const handleCustomerNameChange = (value: string) => {
+        setCustomerName(value);
+        setCustomerSearchTerm(value);
+        if (value !== customerSearchTerm) {
+            setContactNumber(''); // Clear phone when typing new name
+        }
+    };
+    
+    const handleCustomerKeyDown = (e: React.KeyboardEvent) => {
+        if (showCustomerResults && customerSearchResults.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setCustomerFocusedIndex(prev => (prev + 1) % customerSearchResults.length);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setCustomerFocusedIndex(prev => (prev - 1 + customerSearchResults.length) % customerSearchResults.length);
+            } else if (e.key === 'Enter' && customerFocusedIndex > -1) {
+                e.preventDefault();
+                handleSelectCustomer(customerSearchResults[customerFocusedIndex]);
+            } else if (e.key === 'Escape') {
+                setShowCustomerResults(false);
+            }
+        }
     };
     
     const handleQuantityChange = (productId: string, pack: string, stripsStr: string, unitsStr: string) => {
@@ -582,7 +675,14 @@ const Sell: React.FC = () => {
         const units = parseInt(unitsStr, 10) || 0;
         const totalQuantity = (strips * unitsPerPack) + units;
         
-        updateProductQuantityInCart(productId, totalQuantity);
+        // Update cart item quantity directly
+        setCart(prevCart => 
+            prevCart.map(item => 
+                item.productId === productId 
+                    ? { ...item, quantity: totalQuantity }
+                    : item
+            )
+        );
     };
 
     const toggleRow = (productId: string) => {
@@ -642,16 +742,8 @@ const Sell: React.FC = () => {
 
     const billSummary = useMemo(() => {
         const subTotal = cart.reduce((total, item) => {
-            const product = products.find(p => p.id === item.productId);
-            const batch = product?.batches.find(b => b.id === item.batchId);
-            if (!product || !batch) return total;
-            
-            const unitsPerPack = getUnitsInPack(product.pack);
-            const pricePerUnit = item.price / unitsPerPack;
-            
-            const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
-            const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
-
+            // Use item price directly instead of looking up product
+            const effectivePrice = item.price;
             return total + effectivePrice * item.quantity;
         }, 0);
 
@@ -670,14 +762,7 @@ const Sell: React.FC = () => {
         let totalCgst = 0;
 
         cart.forEach(item => {
-            const product = products.find(p => p.id === item.productId);
-            const batch = product?.batches.find(b => b.id === item.batchId);
-            if (!product || !batch) return;
-
-            const unitsPerPack = getUnitsInPack(product.pack);
-            const pricePerUnit = item.price / unitsPerPack;
-            const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
-            const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
+            const effectivePrice = item.price;
             const itemSubTotal = effectivePrice * item.quantity;
             
             const itemProportionalValue = subTotal > 0 ? (itemSubTotal / subTotal) * (subTotal - discountAmount - voucherDiscount) : 0;
@@ -698,9 +783,10 @@ const Sell: React.FC = () => {
         const grandTotal = totalAfterDiscount + totalSgst + totalCgst;
 
         return { subTotal, discountAmount, voucherDiscount, totalSgst, totalCgst, grandTotal, taxBreakdown, taxableValue: totalAfterDiscount };
-    }, [cart, discount, isRghs, gstSettings, products, appliedVoucher]);
+    }, [cart, discount, isRghs, appliedVoucher]);
     
     const consolidatedCart = useMemo(() => {
+        console.log('Raw cart:', cart);
         const consolidated = new Map<string, {
             product: Product;
             totalQuantity: number;
@@ -711,11 +797,18 @@ const Sell: React.FC = () => {
 
         cart.forEach(item => {
             const product = products.find(p => p.id === item.productId);
-            const batch = product?.batches.find(b => b.id === item.batchId);
-            if (!product || !batch) return;
+            // If product not found in products array, create a minimal product object
+            const productData = product || {
+                id: item.productId,
+                name: item.productName,
+                pack: '1 unit', // default
+                batches: [{ id: item.batchId, batchNumber: 'N/A', stock: 1, mrp: item.price }]
+            };
+            const batch = productData.batches.find(b => b.id === item.batchId) || productData.batches[0];
+            if (!productData || !batch) return;
 
             const existing = consolidated.get(item.productId);
-            const unitsPerPack = getUnitsInPack(product.pack);
+            const unitsPerPack = getUnitsInPack(productData.pack);
             const pricePerUnit = item.price / unitsPerPack;
             const hasSaleDiscount = batch.saleDiscount && batch.saleDiscount > 0;
             const effectivePrice = hasSaleDiscount ? pricePerUnit * (1 - batch.saleDiscount! / 100) : pricePerUnit;
@@ -727,7 +820,7 @@ const Sell: React.FC = () => {
                 existing.batches.push({ batch, quantity: item.quantity });
             } else {
                 consolidated.set(item.productId, {
-                    product,
+                    product: productData,
                     totalQuantity: item.quantity,
                     totalValue: itemValue,
                     tax: item.tax,
@@ -765,11 +858,27 @@ const Sell: React.FC = () => {
         }
         setValidationErrors({});
 
-        const customer = findOrCreateCustomer(customerName, contactNumber);
+        let customer;
+        if (customerName.trim() && contactNumber.trim()) {
+            try {
+                // Create or update customer in backend
+                customer = await createOrUpdateCustomer({
+                    name: customerName.trim(),
+                    phoneNumber: contactNumber.trim()
+                });
+            } catch (error) {
+                console.error('Failed to create/update customer:', error);
+                alert('Failed to save customer information. Please try again.');
+                return;
+            }
+        } else {
+            // Use local customer creation for walk-in customers
+            customer = findOrCreateCustomer(customerName, contactNumber);
+        }
 
         const newTransaction: Transaction = {
             id: `trans_${Date.now()}`,
-            customerId: customer.id,
+            customerId: customer.customerId || customer.id,
             customerName: customer.name, doctorName, doctorRegNo, isRghs,
             items: itemsToBill,
             total: billSummary.grandTotal, date: new Date().toISOString(),
@@ -777,6 +886,30 @@ const Sell: React.FC = () => {
             status: paymentMethod === 'Credit' ? 'credit' : 'paid',
             paymentMethod: paymentMethod === 'Credit' ? undefined : paymentMethod,
         };
+        
+        try {
+            // Create transaction in backend
+            const backendTransaction = await createTransaction({
+                customerId: customer.customerId || customer.id,
+                customerName: customer.name,
+                doctorName,
+                doctorRegNo,
+                isRghs,
+                items: itemsToBill,
+                total: billSummary.grandTotal,
+                discountPercentage: discount,
+                status: paymentMethod === 'Credit' ? 'credit' : 'paid',
+                paymentMethod: paymentMethod === 'Credit' ? undefined : paymentMethod,
+            });
+            
+            console.log('Transaction created in backend:', backendTransaction);
+            // Use backend transaction ID
+            newTransaction.id = backendTransaction._id || backendTransaction.id;
+        } catch (error) {
+            console.error('Failed to create transaction in backend:', error);
+            alert('Failed to save transaction. Please try again.');
+            return;
+        }
         
         const attachedPrescriptions: { [productId: string]: string } = {};
         for (const [productId, p] of Object.entries(prescriptions)) {
@@ -898,9 +1031,31 @@ const Sell: React.FC = () => {
             <div className="lg:col-span-2 flex flex-col h-full">
                 <h1 className="text-3xl font-bold text-foreground mb-4">Sell</h1>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <input type="text" placeholder="Customer Name" value={customerName} onChange={e => { setCustomerName(e.target.value); if(validationErrors.customerName) setValidationErrors(p => ({...p, customerName: ''}))}} className={`w-full p-3 border rounded-lg bg-input text-foreground ${validationErrors.customerName ? 'border-destructive' : 'border-border'}`} />
+                    <div ref={customerSearchRef} className="relative">
+                        <input 
+                            type="text" 
+                            placeholder="Customer Name (min 3 chars for search)" 
+                            value={customerName} 
+                            onChange={e => handleCustomerNameChange(e.target.value)} 
+                            onKeyDown={handleCustomerKeyDown}
+                            className={`w-full p-3 border rounded-lg bg-input text-foreground ${validationErrors.customerName ? 'border-destructive' : 'border-border'}`} 
+                        />
                         {validationErrors.customerName && <p className="text-destructive text-xs mt-1">{validationErrors.customerName}</p>}
+                        {showCustomerResults && customerSearchResults.length > 0 && (
+                            <ul className="absolute top-full mt-1 w-full bg-card border border-border rounded-lg shadow-xl z-50 max-h-40 overflow-y-auto">
+                                {customerSearchResults.map((customer, index) => (
+                                    <li 
+                                        key={customer._id} 
+                                        onClick={() => handleSelectCustomer(customer)} 
+                                        onMouseEnter={() => setCustomerFocusedIndex(index)}
+                                        className={`p-3 cursor-pointer border-b border-border last:border-b-0 ${customerFocusedIndex === index ? 'bg-secondary' : 'hover:bg-secondary/50'}`}
+                                    >
+                                        <p className="font-semibold">{customer.name}</p>
+                                        <p className="text-sm text-muted-foreground">{customer.phoneNumber}</p>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
                     </div>
                      <div>
                         <input type="text" placeholder="Contact Number" value={contactNumber} onChange={e => { setContactNumber(e.target.value); if(validationErrors.contactNumber) setValidationErrors(p => ({...p, contactNumber: ''}))}} className={`w-full p-3 border rounded-lg bg-input text-foreground ${validationErrors.contactNumber ? 'border-destructive' : 'border-border'}`} />
@@ -916,7 +1071,7 @@ const Sell: React.FC = () => {
                  <div ref={searchRef} className="relative mb-4 flex gap-2">
                     <div className="relative flex-grow">
                         <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                        <input type="text" placeholder="Search for products..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={handleKeyDown} className="w-full p-3 pl-10 border border-border rounded-lg bg-input" />
+                        <input type="text" placeholder="Search for products (min 3 chars)..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={handleKeyDown} className="w-full p-3 pl-10 border border-border rounded-lg bg-input" />
                     </div>
                     <button onClick={() => setIsScannerOpen(true)} className="p-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 font-semibold shadow-sm flex items-center gap-2">
                         <CameraIcon className="w-5 h-5"/>
@@ -925,7 +1080,7 @@ const Sell: React.FC = () => {
                     {showResults && (
                         <ul className="absolute top-full mt-1 w-full bg-card border border-border rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto">
                             {searchResults.length > 0 ? searchResults.map((p, index) => (
-                                <li key={p.id} onClick={() => handleSelectProduct(p)} onMouseEnter={() => setFocusedIndex(index)} className={`p-3 cursor-pointer ${focusedIndex === index ? 'bg-secondary' : 'hover:bg-secondary/50'}`}>
+                                <li key={p._id || p.id} onClick={() => handleSelectProduct(p)} onMouseEnter={() => setFocusedIndex(index)} className={`p-3 cursor-pointer ${focusedIndex === index ? 'bg-secondary' : 'hover:bg-secondary/50'}`}>
                                     <p className="font-semibold">{p.name}</p>
                                     <p className="text-sm text-muted-foreground">Stock: {p.batches.reduce((s, b) => s + b.stock, 0)} | MRP: ₹{p.batches.find(b=>b.stock > 0)?.mrp.toFixed(2)}</p>
                                 </li>
@@ -935,6 +1090,7 @@ const Sell: React.FC = () => {
                 </div>
 
                 <div className="bg-card rounded-lg border border-border flex-grow overflow-y-auto">
+                     <div className="p-2 text-xs text-muted-foreground">Cart items: {cart.length} | Consolidated: {consolidatedCart.length}</div>
                      <table className="w-full text-sm">
                         <thead className="text-xs text-muted-foreground uppercase bg-secondary/50 sticky top-0 border-b border-border"><tr><th className="px-4 py-3 text-left font-semibold">Product</th><th className="px-4 py-3 text-left font-semibold">Quantity</th><th className="px-4 py-3 text-right font-semibold">Rate</th><th className="px-4 py-3 text-right font-semibold">Amount</th><th className="px-4 py-3"></th></tr></thead>
                         <tbody>

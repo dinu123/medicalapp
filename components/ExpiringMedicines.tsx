@@ -2,8 +2,9 @@ import React, { useState, useContext, useMemo, useRef, useEffect } from 'react';
 import { AppContext } from '../App';
 import { Product, Batch } from '../types';
 import { ActionsIcon, ExportIcon, XIcon, SearchIcon } from './Icons';
+import { getExpiringProducts, updateBatchDiscount } from '../services/productService';
 
-type ExpiryFilter = 'expired' | 15 | 30 | 60 | 90;
+type ExpiryFilter = 'expired' | '15' | '30' | '60' | '90';
 
 const SetDiscountModal: React.FC<{
     batch: Batch & { product: Product };
@@ -16,7 +17,7 @@ const SetDiscountModal: React.FC<{
     const isBelowCost = newSellingPrice < batch.price;
 
     const handleSave = () => {
-        onSave(batch.id, discountPercent);
+        onSave(batch._id, discountPercent);
         onClose();
     };
 
@@ -65,12 +66,30 @@ const SetDiscountModal: React.FC<{
 };
 
 const ExpiringMedicines: React.FC = () => {
-    const { products, setProducts, purchases, suppliers, setActivePage, setReturnInitiationData } = useContext(AppContext);
-    const [filter, setFilter] = useState<ExpiryFilter>(30);
+    const { setActivePage, setReturnInitiationData } = useContext(AppContext);
+    const [filter, setFilter] = useState<ExpiryFilter>('30');
     const [searchTerm, setSearchTerm] = useState('');
     const [openActionsMenu, setOpenActionsMenu] = useState<string | null>(null);
+    const [batchToDiscount, setBatchToDiscount] = useState<any | null>(null);
+    const [expiringBatches, setExpiringBatches] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
     const actionsMenuRef = useRef<HTMLDivElement>(null);
-    const [batchToDiscount, setBatchToDiscount] = useState<(Batch & {product: Product}) | null>(null);
+
+    useEffect(() => {
+        const fetchExpiringProducts = async () => {
+            setLoading(true);
+            try {
+                const batches = await getExpiringProducts(filter);
+                setExpiringBatches(batches);
+            } catch (error) {
+                console.error('Failed to fetch expiring products:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        fetchExpiringProducts();
+    }, [filter]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -82,63 +101,17 @@ const ExpiringMedicines: React.FC = () => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
     
-    const batchToSupplierMap = useMemo(() => {
-        const map = new Map<string, string>();
-        for (const purchase of purchases) {
-            const supplier = suppliers.find(s => s.id === purchase.supplierId);
-            if (supplier) {
-                for (const item of purchase.items) {
-                    map.set(item.batchId, supplier.name);
-                }
-            }
-        }
-        return map;
-    }, [purchases, suppliers]);
-
-    const expiringBatches = useMemo(() => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        return products.flatMap(product => 
-            product.batches
-            .filter(batch => batch.stock > 0)
-            .map(batch => ({ ...batch, product, supplierName: batchToSupplierMap.get(batch.id) || 'N/A' }))
-        );
-    }, [products, batchToSupplierMap]);
-
     const filteredBatches = useMemo(() => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        let dateFilteredBatches;
-
-        if (filter === 'expired') {
-            dateFilteredBatches = expiringBatches
-                .filter(b => new Date(b.expiryDate) < today)
-                .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
-        } else {
-            const futureDate = new Date(today);
-            futureDate.setDate(today.getDate() + filter);
-
-            dateFilteredBatches = expiringBatches
-                .filter(b => {
-                    const expiryDate = new Date(b.expiryDate);
-                    return expiryDate >= today && expiryDate <= futureDate;
-                })
-                .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
-        }
-
         if (!searchTerm) {
-            return dateFilteredBatches;
+            return expiringBatches;
         }
 
         const lowerCaseSearchTerm = searchTerm.toLowerCase();
-        return dateFilteredBatches.filter(b => 
+        return expiringBatches.filter(b => 
             b.product.name.toLowerCase().includes(lowerCaseSearchTerm) ||
-            b.supplierName.toLowerCase().includes(lowerCaseSearchTerm) ||
             b.batchNumber.toLowerCase().includes(lowerCaseSearchTerm)
         );
-    }, [expiringBatches, filter, searchTerm]);
+    }, [expiringBatches, searchTerm]);
 
     const FilterButton: React.FC<{ label: string; value: ExpiryFilter; }> = ({ label, value }) => (
         <button
@@ -149,15 +122,11 @@ const ExpiringMedicines: React.FC = () => {
         </button>
     );
     
-    const getDaysRemaining = (expiry: string) => {
-        const expiryDate = new Date(expiry);
-        const today = new Date();
-        const diffTime = expiryDate.getTime() - today.getTime();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        if (diffDays < 0) return { text: 'Expired', color: 'text-red-600 font-bold' };
-        if (diffDays === 0) return { text: 'Expires Today', color: 'text-red-600 font-bold' };
-        if (diffDays <= 30) return { text: `${diffDays} days left`, color: 'text-red-600 font-bold' };
-        return { text: `${diffDays} days left`, color: 'text-muted-foreground' };
+    const getDaysRemaining = (daysRemaining: number) => {
+        if (daysRemaining < 0) return { text: 'Expired', color: 'text-red-600 font-bold' };
+        if (daysRemaining === 0) return { text: 'Expires Today', color: 'text-red-600 font-bold' };
+        if (daysRemaining <= 30) return { text: `${daysRemaining} days left`, color: 'text-red-600 font-bold' };
+        return { text: `${daysRemaining} days left`, color: 'text-muted-foreground' };
     };
     
     const handleReturnToSupplier = (batch: Batch & { product: Product }) => {
@@ -165,15 +134,19 @@ const ExpiringMedicines: React.FC = () => {
         setActivePage('returns');
     };
 
-    const handleSaveDiscount = (batchId: string, discount: number) => {
-        setProducts(prevProducts => {
-            return prevProducts.map(p => ({
-                ...p,
-                batches: p.batches.map(b => 
-                    b.id === batchId ? { ...b, saleDiscount: discount } : b
-                )
-            }));
-        });
+    const handleSaveDiscount = async (batchId: string, discount: number) => {
+        try {
+            const batch = expiringBatches.find(b => b._id === batchId);
+            if (batch) {
+                await updateBatchDiscount(batch.product._id, batchId, discount);
+                // Update local state immediately
+                setExpiringBatches(prev => prev.map(b => 
+                    b._id === batchId ? { ...b, saleDiscount: discount } : b
+                ));
+            }
+        } catch (error) {
+            console.error('Failed to update discount:', error);
+        }
     };
 
     const handleExport = () => {
@@ -222,10 +195,10 @@ const ExpiringMedicines: React.FC = () => {
                     </button>
                     <div className="flex items-center space-x-2 bg-card p-1 rounded-lg border flex-wrap">
                         <FilterButton label="Expired" value="expired" />
-                        <FilterButton label="In 15 Days" value={15} />
-                        <FilterButton label="In 30 Days" value={30} />
-                        <FilterButton label="In 60 Days" value={60} />
-                        <FilterButton label="In 90 Days" value={90} />
+                        <FilterButton label="In 15 Days" value="15" />
+                        <FilterButton label="In 30 Days" value="30" />
+                        <FilterButton label="In 60 Days" value="60" />
+                        <FilterButton label="In 90 Days" value="90" />
                     </div>
                 </div>
             </div>
@@ -242,7 +215,12 @@ const ExpiringMedicines: React.FC = () => {
                 />
             </div>
 
-            <div className="bg-card rounded-xl border border-border overflow-x-auto">
+            {loading ? (
+                <div className="flex justify-center items-center h-64">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                </div>
+            ) : (
+            <div className="bg-card rounded-xl border border-border">
                 <table className="w-full text-sm text-left text-foreground">
                     <thead className="text-xs text-muted-foreground uppercase bg-secondary border-b border-border">
                         <tr>
@@ -258,38 +236,40 @@ const ExpiringMedicines: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-border">
                         {filteredBatches.map(b => {
-                            const daysRemaining = getDaysRemaining(b.expiryDate);
+                            const daysRemaining = getDaysRemaining(b.daysRemaining);
                             return (
-                                <tr key={b.id} className="hover:bg-secondary/50">
+                                <tr key={b._id} className="hover:bg-secondary/50">
                                     <td className="px-6 py-4 font-semibold text-foreground whitespace-nowrap">{b.product.name}</td>
                                     <td className="px-6 py-4">{b.batchNumber}</td>
-                                    <td className="px-6 py-4">{b.supplierName}</td>
-                                    <td className="px-6 py-4">{b.expiryDate.split('-').reverse().join('-')}</td>
+                                    <td className="px-6 py-4">{b.product.manufacturer}</td>
+                                    <td className="px-6 py-4">{new Date(b.expiryDate).toLocaleDateString('en-GB')}</td>
                                     <td className={`px-6 py-4 whitespace-nowrap ${daysRemaining.color}`}>{daysRemaining.text}</td>
                                     <td className="px-6 py-4 font-bold">{b.stock}</td>
                                     <td className="px-6 py-4">₹{b.mrp.toFixed(2)}</td>
-                                    <td className="px-6 py-4 relative text-center">
-                                        <button onClick={(e) => { e.stopPropagation(); setOpenActionsMenu(b.id === openActionsMenu ? null : b.id); }} className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-border">
-                                            <ActionsIcon />
-                                        </button>
-                                        {openActionsMenu === b.id && (
-                                            <div ref={actionsMenuRef} className="absolute right-8 mt-2 w-48 bg-card border border-border rounded-lg shadow-xl z-20">
-                                                <ul className="py-1">
-                                                    <li><button onClick={() => { handleReturnToSupplier(b); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Return to Supplier</button></li>
-                                                    <li><button onClick={() => { setBatchToDiscount(b); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Set Sale Discount</button></li>
-                                                </ul>
-                                            </div>
-                                        )}
+                                    <td className="px-6 py-4 text-center">
+                                        <div className="relative">
+                                            <button onClick={(e) => { e.stopPropagation(); setOpenActionsMenu(b._id === openActionsMenu ? null : b._id); }} className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-border">
+                                                <ActionsIcon />
+                                            </button>
+                                            {openActionsMenu === b._id && (
+                                                <div ref={actionsMenuRef} className="absolute right-0 top-8 w-48 bg-card border border-border rounded-lg shadow-xl z-50">
+                                                    <ul className="py-1">
+                                                        <li><button onClick={() => { setBatchToDiscount(b); setOpenActionsMenu(null); }} className="w-full text-left px-4 py-2 text-sm hover:bg-secondary">Set Sale Discount</button></li>
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </div>
                                     </td>
                                 </tr>
                             );
                         })}
                     </tbody>
                 </table>
-                {filteredBatches.length === 0 && (
+                {filteredBatches.length === 0 && !loading && (
                     <p className="text-center py-12 text-muted-foreground">No products found for this filter.</p>
                 )}
             </div>
+            )}
             {batchToDiscount && (
                 <SetDiscountModal 
                     batch={batchToDiscount}

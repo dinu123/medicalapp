@@ -3,6 +3,7 @@ import { AppContext } from '../App';
 import { Transaction, Purchase, TransactionFilterType, Product, MedicineSchedule, Supplier } from '../types';
 import { ExportIcon, FilterIcon, CalendarIcon, XIcon } from './Icons';
 import { getFile } from '../services/db';
+import { getTransactions, getTransactionStats, getFilteredTransactions } from '../services/transactionService';
 
 type CombinedTransaction = (Transaction | Purchase) & { type: 'Sale' | 'Purchase' };
 
@@ -160,7 +161,7 @@ const ExportReportsModal: React.FC<{
 
 
 const TransactionHistory: React.FC = () => {
-    const { transactions, purchases, transactionFilter, setTransactionFilter, suppliers, products } = useContext(AppContext);
+    const { transactions, setTransactions, purchases, transactionFilter, setTransactionFilter, suppliers, products } = useContext(AppContext);
     
     const [localFilter, setLocalFilter] = useState<TransactionFilterType>(transactionFilter.type);
     const [showFilters, setShowFilters] = useState(false);
@@ -171,6 +172,95 @@ const TransactionHistory: React.FC = () => {
     const [partySearch, setPartySearch] = useState('');
     const [expandedRows, setExpandedRows] = useState<string[]>([]);
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [transactionStats, setTransactionStats] = useState({ totalTransactions: 0, totalSales: 0, totalPurchases: 0 });
+
+    // Fetch transactions and stats from backend
+    useEffect(() => {
+        const fetchData = async () => {
+            setLoading(true);
+            try {
+                const [backendTransactions, stats] = await Promise.all([
+                    getTransactions(),
+                    getTransactionStats()
+                ]);
+                
+                console.log('Fetched transactions from backend:', backendTransactions);
+                
+                // Convert backend transactions to frontend format
+                const formattedTransactions = backendTransactions.map((t: any) => ({
+                    id: t._id || t.id,
+                    type: t.type || 'sale', // Default to 'sale' if type is missing
+                    customerId: t.customerId,
+                    customerName: t.customerName,
+                    supplierName: t.supplierName,
+                    doctorName: t.doctorName,
+                    doctorRegNo: t.doctorRegNo,
+                    isRghs: t.isRghs,
+                    items: t.items,
+                    total: t.total,
+                    date: t.createdAt || t.date,
+                    discountPercentage: t.discountPercentage,
+                    status: t.status,
+                    paymentMethod: t.paymentMethod,
+                    attachedPrescriptions: t.attachedPrescriptions
+                }));
+                
+                // Replace context transactions with backend data only
+                setTransactions(formattedTransactions);
+                setTransactionStats(stats);
+            } catch (error) {
+                console.error('Failed to fetch data:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+    }, []);
+
+    // Fetch filtered transactions when any filter changes
+    useEffect(() => {
+        if (!showFilters) return;
+        
+        const fetchFilteredData = async () => {
+            setLoading(true);
+            try {
+                const filters = {
+                    type: localFilter !== 'all' ? localFilter.slice(0, -1) : '',
+                    startDate: dateRange.from,
+                    endDate: dateRange.to,
+                    productSearch: productSearch.length >= 3 ? productSearch : '',
+                    partySearch: partySearch.length >= 3 ? partySearch : '',
+                    paymentMethods: paymentMethodFilters.length > 0 ? paymentMethodFilters : '',
+                    schedules: scheduleFilters.length > 0 ? scheduleFilters : ''
+                };
+                
+                const filtered = await getFilteredTransactions(filters);
+                const formattedTransactions = filtered.map((t: any) => ({
+                    id: t._id || t.id,
+                    type: t.type || 'sale',
+                    customerId: t.customerId,
+                    customerName: t.customerName,
+                    supplierName: t.supplierName,
+                    doctorName: t.doctorName,
+                    items: t.items,
+                    total: t.total,
+                    date: t.createdAt || t.date,
+                    status: t.status,
+                    paymentMethod: t.paymentMethod
+                }));
+                
+                setTransactions(formattedTransactions);
+            } catch (error) {
+                console.error('Failed to fetch filtered transactions:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        fetchFilteredData();
+    }, [localFilter, dateRange, scheduleFilters, paymentMethodFilters, productSearch, partySearch, showFilters]);
 
     useEffect(() => {
         setLocalFilter(transactionFilter.type);
@@ -187,9 +277,36 @@ const TransactionHistory: React.FC = () => {
         };
     }, []);
 
-    const handleFilterChange = (newFilter: TransactionFilterType) => {
+    const handleFilterChange = async (newFilter: TransactionFilterType) => {
         setLocalFilter(newFilter);
         setTransactionFilter({ type: newFilter, period: 'all' });
+        
+        // Fetch filtered data from backend
+        setLoading(true);
+        try {
+            const filters = {
+                type: newFilter !== 'all' ? newFilter.slice(0, -1) : '', // 'sales' -> 'sale'
+            };
+            
+            const filtered = await getFilteredTransactions(filters);
+            const formattedTransactions = filtered.map((t: any) => ({
+                id: t._id || t.id,
+                customerId: t.customerId,
+                customerName: t.customerName,
+                doctorName: t.doctorName,
+                items: t.items,
+                total: t.total,
+                date: t.createdAt || t.date,
+                status: t.status,
+                paymentMethod: t.paymentMethod
+            }));
+            
+            setTransactions(formattedTransactions);
+        } catch (error) {
+            console.error('Failed to fetch filtered transactions:', error);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleScheduleFilterToggle = (schedule: string) => {
@@ -205,65 +322,32 @@ const TransactionHistory: React.FC = () => {
     };
 
     const allTransactions = useMemo(() => {
-        const formattedSales: CombinedTransaction[] = transactions.map(t => ({...t, type: 'Sale' as const}));
-        const formattedPurchases: CombinedTransaction[] = purchases.map(p => ({...p, type: 'Purchase' as const}));
-        return [...formattedSales, ...formattedPurchases].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    }, [transactions, purchases]);
+        console.log('Raw transactions:', transactions);
+        // Use the type from backend data and capitalize it for display
+        const formattedTransactions: CombinedTransaction[] = transactions.map(t => {
+            console.log('Transaction type:', t.type);
+            return {
+                ...t, 
+                type: (t.type === 'sale' || !t.type) ? 'Sale' as const : 'Purchase' as const
+            };
+        });
+        return formattedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [transactions]);
 
     const filteredTransactions = useMemo(() => {
+        // When filters are active, use backend-filtered data directly
+        if (showFilters && (localFilter !== 'all' || dateRange.from || dateRange.to || scheduleFilters.length > 0 || paymentMethodFilters.length > 0 || productSearch.length >= 3 || partySearch.length >= 3)) {
+            return allTransactions;
+        }
+        
+        // Only apply frontend filtering when no backend filters are active
         let results: CombinedTransaction[] = allTransactions;
 
         if (localFilter === 'sales') results = results.filter(t => t.type === 'Sale');
         else if (localFilter === 'purchases') results = results.filter(t => t.type === 'Purchase');
 
-        if (dateRange.from && dateRange.to) {
-            const from = new Date(dateRange.from).getTime();
-            const to = new Date(dateRange.to).getTime() + 86400000;
-            results = results.filter(t => { const tDate = new Date(t.date).getTime(); return tDate >= from && tDate <= to; });
-        }
-
-        if (scheduleFilters.length > 0) {
-            results = results.filter(t => t.items.some(item => {
-                const product = products.find(p => p.id === item.productId);
-                return product && product.schedule && scheduleFilters.includes(product.schedule);
-            }));
-        }
-        
-        if (paymentMethodFilters.length > 0) {
-            results = results.filter(t => {
-                if (t.type === 'Sale') {
-                    const sale = t as Transaction;
-                    if (sale.status === 'credit' && paymentMethodFilters.includes('Credit')) return true;
-                    if (sale.paymentMethod && paymentMethodFilters.includes(sale.paymentMethod)) return true;
-                } else { // Purchase
-                    const purchase = t as Purchase;
-                    if (purchase.status === 'credit' && paymentMethodFilters.includes('Credit')) return true;
-                    if (purchase.paymentMethod) {
-                        const method = purchase.paymentMethod; // 'cash' | 'bank' | 'upi'
-                        if (method === 'cash' && paymentMethodFilters.includes('Cash')) return true;
-                        if (method === 'bank' && paymentMethodFilters.includes('Bank')) return true;
-                        if (method === 'upi' && paymentMethodFilters.includes('UPI')) return true;
-                    }
-                }
-                return false;
-            });
-        }
-        
-        if (productSearch) {
-            const lowerProductSearch = productSearch.toLowerCase();
-            results = results.filter(t => t.items.some(item => item.productName.toLowerCase().includes(lowerProductSearch)));
-        }
-        
-        if (partySearch) {
-            const lowerPartySearch = partySearch.toLowerCase();
-            results = results.filter(t => {
-                if (t.type === 'Sale') return (t as Transaction).customerName?.toLowerCase().includes(lowerPartySearch);
-                const supplier = suppliers.find(s => s.id === (t as Purchase).supplierId);
-                return supplier?.name.toLowerCase().includes(lowerPartySearch);
-            });
-        }
         return results;
-    }, [allTransactions, localFilter, dateRange, scheduleFilters, paymentMethodFilters, productSearch, partySearch, products, suppliers]);
+    }, [allTransactions, localFilter, dateRange, scheduleFilters, paymentMethodFilters, productSearch, partySearch, products, suppliers, showFilters]);
 
     const summaryData = useMemo(() => {
         let totalSales = 0, totalPurchases = 0;
@@ -274,7 +358,7 @@ const TransactionHistory: React.FC = () => {
     const toggleRow = (id: string) => setExpandedRows(prev => prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]);
 
     const handleExportCurrentView = () => {
-        const dataToExport = filteredTransactions.map(t => {
+                const dataToExport = filteredTransactions.map(t => {
             let payment = 'N/A';
             if (t.type === 'Sale') {
                 const sale = t as Transaction;
@@ -286,8 +370,8 @@ const TransactionHistory: React.FC = () => {
             
             return {
                 'ID': t.type === 'Sale'
-                    ? `SALE-${t.id.slice(-6).toUpperCase()}`
-                    : (t as Purchase).invoiceNumber || `PUR-${t.id.slice(-6).toUpperCase()}`,
+                    ? `SALE-${(t.id || '').slice(-6).toUpperCase()}`
+                    : (t as Purchase).invoiceNumber || `PUR-${(t.id || '').slice(-6).toUpperCase()}`,
                 'Type': t.type,
                 'Date': new Date(t.date).toLocaleDateString('en-CA'),
                 'Party': t.type === 'Sale' ? (t as Transaction).customerName : suppliers.find(s => s.id === (t as Purchase).supplierId)?.name || 'N/A',
@@ -312,7 +396,10 @@ const TransactionHistory: React.FC = () => {
     return (
         <div className="p-4 sm:p-6 lg:p-8">
             <header className="flex flex-wrap gap-4 justify-between items-center mb-6">
-                <h1 className="text-3xl font-bold text-foreground">Transaction History</h1>
+                <div>
+                    <h1 className="text-3xl font-bold text-foreground">Transaction History</h1>
+                    {loading && <p className="text-sm text-muted-foreground">Loading transactions...</p>}
+                </div>
                 <div className="flex items-center space-x-2">
                     <button onClick={handleExportCurrentView} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm"><ExportIcon className="mr-2 h-4 w-4" /> Export View</button>
                     <button onClick={() => setIsExportModalOpen(true)} className="flex items-center px-3 py-2 border border-border rounded-lg bg-secondary hover:bg-border/50 font-semibold text-sm"><ExportIcon className="mr-2 h-4 w-4" /> Schedule Drug Reports</button>
@@ -320,9 +407,9 @@ const TransactionHistory: React.FC = () => {
             </header>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <SummaryCard title="Filtered Transactions" value={summaryData.transactionCount} />
-                <SummaryCard title="Total Sales Value" value={`₹${summaryData.totalSales.toLocaleString('en-IN')}`} />
-                <SummaryCard title="Total Purchase Value" value={`₹${summaryData.totalPurchases.toLocaleString('en-IN')}`} />
+                <SummaryCard title="Total Transactions" value={transactionStats.totalTransactions} />
+                <SummaryCard title="Total Sales Value" value={`₹${transactionStats.totalSales.toLocaleString('en-IN')}`} />
+                <SummaryCard title="Total Purchase Value" value={`₹${transactionStats.totalPurchases.toLocaleString('en-IN')}`} />
             </div>
 
             <div className="bg-card rounded-xl border border-border p-4 mb-6">
@@ -348,11 +435,11 @@ const TransactionHistory: React.FC = () => {
                         <div className="space-y-4">
                             <div>
                                 <label className="text-sm font-semibold text-muted-foreground mb-1 block">By Product</label>
-                                <input type="text" placeholder="Product name..." value={productSearch} onChange={e=>setProductSearch(e.target.value)} className="w-full mt-1 p-2 border border-border rounded-md bg-input"/>
+                                <input type="text" placeholder="Product name (min 3 chars)..." value={productSearch} onChange={e=>setProductSearch(e.target.value)} className="w-full mt-1 p-2 border border-border rounded-md bg-input"/>
                             </div>
                              <div>
                                 <label className="text-sm font-semibold text-muted-foreground mb-1 block">By Customer/Supplier</label>
-                                <input type="text" placeholder="Party name..." value={partySearch} onChange={e=>setPartySearch(e.target.value)} className="w-full mt-1 p-2 border border-border rounded-md bg-input"/>
+                                <input type="text" placeholder="Party name (min 3 chars)..." value={partySearch} onChange={e=>setPartySearch(e.target.value)} className="w-full mt-1 p-2 border border-border rounded-md bg-input"/>
                             </div>
                         </div>
                         <div className="space-y-4">
@@ -401,8 +488,8 @@ const TransactionHistory: React.FC = () => {
                                         <td className="px-4 py-3">
                                             <p className="font-mono text-xs">
                                                 {t.type === 'Sale'
-                                                    ? `SALE-${t.id.slice(-6).toUpperCase()}`
-                                                    : (t as Purchase).invoiceNumber || `PUR-${t.id.slice(-6).toUpperCase()}`}
+                                                    ? `SALE-${(t.id || '').slice(-6).toUpperCase()}`
+                                                    : (t as Purchase).invoiceNumber || `PUR-${(t.id || '').slice(-6).toUpperCase()}`}
                                             </p>
                                             <span className={`px-2 py-0.5 text-xs font-bold rounded-full ${t.type === 'Sale' ? 'bg-success/10 text-success' : 'bg-blue-500/10 text-blue-500'}`}>{t.type.toUpperCase()}</span>
                                         </td>
@@ -450,7 +537,8 @@ const TransactionHistory: React.FC = () => {
                         })}
                     </tbody>
                 </table>
-                {filteredTransactions.length === 0 && <p className="text-center py-12 text-muted-foreground">No transactions found for the selected filters.</p>}
+                {filteredTransactions.length === 0 && !loading && <p className="text-center py-12 text-muted-foreground">No transactions found for the selected filters.</p>}
+                {loading && <p className="text-center py-12 text-muted-foreground">Loading transactions...</p>}
             </div>
             {isExportModalOpen && <ExportReportsModal onClose={() => setIsExportModalOpen(false)} {...{transactions, purchases, products, suppliers}} />}
         </div>

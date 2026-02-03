@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Product, Transaction, ParsedPrescription } from '../types';
 
 const API_KEY = process.env.API_KEY;
@@ -7,7 +7,7 @@ if (!API_KEY) {
   console.error("Gemini API key not found. Please set the API_KEY environment variable.");
 }
 
-const ai = new GoogleGenAI({ apiKey: API_KEY! });
+const genAI = new GoogleGenerativeAI(API_KEY!);
 
 // Helper function to convert File to GoogleGenerativeAI.Part
 const fileToGenerativePart = async (file: File) => {
@@ -29,27 +29,25 @@ export const getMedicineInfo = async (medicineName: string): Promise<string> => 
   if (!API_KEY) return "API Key not configured.";
   try {
     const prompt = `Provide a concise summary for the medicine "${medicineName}" suitable for a pharmacist. Include: 1. Primary Uses, 2. Common Side Effects, 3. Standard Dosage Information. Format the response in clear sections using markdown.`;
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-    });
-    return response.text;
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const response = await model.generateContent(prompt);
+    return response.response.text();
   } catch (error) {
     console.error("Error fetching medicine info from Gemini:", error);
     return "Failed to fetch information. Please check the console for details.";
   }
 };
 
-export const getInventorySummary = async (products: Product[]): Promise<string> => {
+export const getInventorySummary = async (products: any[]): Promise<string> => {
     if (!API_KEY) return "API Key not configured.";
-  const totalStock = products.reduce((sum, p) => sum + p.batches.reduce((batchSum, b) => batchSum + b.stock, 0), 0);
+  const totalStock = products.reduce((sum, p) => sum + p.batches.reduce((batchSum: number, b: any) => batchSum + b.stock, 0), 0);
   if (totalStock === 0) {
     return "The inventory is currently empty. No summary can be generated.";
   }
 
   try {
      const inventoryData = products.flatMap(p => 
-      p.batches.map(b => 
+      p.batches.map((b: any) => 
         `- ${p.name} (Batch: ${b.batchNumber}, Stock: ${b.stock}, Expires: ${b.expiryDate}, MRP: ${b.mrp.toFixed(2)})`
       )
     ).join('\n');
@@ -69,18 +67,16 @@ export const getInventorySummary = async (products: Product[]): Promise<string> 
       Please provide the summary in a clear, easy-to-read format.
     `;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-    });
-    return response.text;
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const response = await model.generateContent(prompt);
+    return response.response.text();
   } catch (error) {
     console.error("Error generating inventory summary from Gemini:", error);
     return "Failed to generate summary. Please check the console for details.";
   }
 };
 
-export const getInventoryAnalysis = async (products: Product[], transactions: Transaction[]): Promise<string> => {
+export const getInventoryAnalysis = async (products: any[], transactions: any[]): Promise<string> => {
     if (!API_KEY) return "API Key not configured.";
     
     const ninetyDaysAgo = new Date();
@@ -90,17 +86,19 @@ export const getInventoryAnalysis = async (products: Product[], transactions: Tr
         .filter(t => new Date(t.date) >= ninetyDaysAgo)
         .flatMap(t => t.items)
         .reduce((acc, item) => {
-            acc[item.productId] = (acc[item.productId] || 0) + item.quantity;
+            const productId = item.productId || item.product?._id || item.product;
+            acc[productId] = (acc[productId] || 0) + item.quantity;
             return acc;
         }, {} as Record<string, number>);
 
     const inventoryData = products
         .map(p => {
-            const totalStock = p.batches.reduce((sum, b) => sum + b.stock, 0);
-            const sales = salesLast90Days[p.id] || 0;
+            const totalStock = p.batches.reduce((sum: number, b: any) => sum + b.stock, 0);
+            const productId = p._id || p.id;
+            const sales = salesLast90Days[productId] || 0;
             const batchesInfo = p.batches
-                .filter(b => b.stock > 0)
-                .map(b => `(Expires: ${b.expiryDate}, Stock: ${b.stock})`)
+                .filter((b: any) => b.stock > 0)
+                .map((b: any) => `(Expires: ${b.expiryDate}, Stock: ${b.stock})`)
                 .join(', ');
 
             return `- Product: ${p.name}, Total Stock: ${totalStock}, Min Stock: ${p.minStock || 20}, Sales (Last 90d): ${sales}, Batches: ${batchesInfo}`;
@@ -124,11 +122,9 @@ export const getInventoryAnalysis = async (products: Product[], transactions: Tr
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-        });
-        return response.text;
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const response = await model.generateContent(prompt);
+        return response.response.text();
     } catch (error) {
         console.error("Error generating inventory analysis from Gemini:", error);
         return "Failed to generate inventory analysis. Please check the console for details.";

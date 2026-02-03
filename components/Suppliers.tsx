@@ -1,14 +1,45 @@
-import React, { useState, useContext, useMemo } from 'react';
+import React, { useState, useContext, useEffect, useCallback } from 'react';
 import { AppContext } from '../App';
 import { Supplier } from '../types';
 import { PlusIcon, SearchIcon } from './Icons';
 import { SupplierModal } from './SupplierModal';
+import { searchSuppliers, getSuppliers } from '../services/supplierService';
 
 const Suppliers: React.FC = () => {
     const { suppliers, setSuppliers } = useContext(AppContext);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [supplierToEdit, setSupplierToEdit] = useState<Supplier | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [filteredSuppliers, setFilteredSuppliers] = useState<Supplier[]>(suppliers);
+    const [isSearching, setIsSearching] = useState(false);
+
+    const debouncedSearch = useCallback(
+        debounce(async (term: string) => {
+            setIsSearching(true);
+            try {
+                const results = await searchSuppliers(term);
+                setFilteredSuppliers(results.map((s: any) => ({ ...s, id: s._id })));
+            } catch (error) {
+                console.error('Search error:', error);
+                setFilteredSuppliers([]);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 300),
+        []
+    );
+
+    useEffect(() => {
+        setFilteredSuppliers(suppliers);
+    }, [suppliers]);
+
+    useEffect(() => {
+        if (searchTerm.length === 0) {
+            setFilteredSuppliers(suppliers);
+        } else {
+            debouncedSearch(searchTerm);
+        }
+    }, [searchTerm]);
 
     const handleOpenModal = (supplier?: Supplier) => {
         setSupplierToEdit(supplier || null);
@@ -22,26 +53,12 @@ const Suppliers: React.FC = () => {
 
     const handleSaveSupplier = (savedSupplier: Supplier) => {
         if (suppliers.some(s => s.id === savedSupplier.id)) {
-            // Edit
             setSuppliers(prev => prev.map(s => s.id === savedSupplier.id ? savedSupplier : s));
         } else {
-            // Add
             setSuppliers(prev => [...prev, savedSupplier]);
         }
         handleCloseModal();
     };
-
-    const filteredSuppliers = useMemo(() => {
-        if (!searchTerm) {
-            return suppliers;
-        }
-        const lowerCaseSearchTerm = searchTerm.toLowerCase();
-        return suppliers.filter(s =>
-            s.name.toLowerCase().includes(lowerCaseSearchTerm) ||
-            s.contact.toLowerCase().includes(lowerCaseSearchTerm) ||
-            String(s.defaultDiscount).includes(lowerCaseSearchTerm)
-        );
-    }, [suppliers, searchTerm]);
 
     return (
         <div className="p-4 sm:p-6 lg:p-8">
@@ -58,10 +75,15 @@ const Suppliers: React.FC = () => {
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Search by name, contact, discount %..."
+                    placeholder="Search by name, contact, GSTIN, license numbers..."
                     className="w-full max-w-lg p-2.5 pl-10 border border-border rounded-lg bg-input text-foreground focus:ring-2 focus:ring-ring"
                     aria-label="Search suppliers"
                 />
+                {isSearching && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                    </div>
+                )}
             </div>
 
             <div className="bg-card rounded-xl border border-border overflow-x-auto">
@@ -108,5 +130,13 @@ const Suppliers: React.FC = () => {
         </div>
     );
 };
+
+function debounce<T extends (...args: any[]) => any>(func: T, delay: number): T {
+    let timeoutId: NodeJS.Timeout;
+    return ((...args: any[]) => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => func(...args), delay);
+    }) as T;
+}
 
 export default Suppliers;
