@@ -1,0 +1,15 @@
+version: "3"
+
+services:
+  backend:
+    source: .
+    build:
+      commands:
+        - cd backend && npm install
+    start:
+      command: cd backend && npm start
+    variables:
+      NODE_ENV: production
+      PORT: ${{ PORT }}
+      MONGODB_URI: ${{ MONGODB_URI }}
+      JWT_SECRET: ${{ JWT_SECRET }}
